@@ -1,0 +1,29 @@
+[project]
+name = "personal-agents"
+version = "0.1.0"
+description = "LangGraph based personal agent services."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain-core",
+    "langchain-openai",
+    "langgraph",
+    "python-dotenv",
+]
+
+[dependency-groups]
+dev = [
+    "langgraph-cli[inmem]",
+    "pytest",
+    "ruff",
+]
+
+[tool.uv]
+package = true
+
+[tool.ruff]
+line-length = 80
+src = ["personal_agent", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
