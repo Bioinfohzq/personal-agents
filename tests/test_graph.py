@@ -4,3 +4,4 @@
 def test_graph_is_compiled() -> None:
     graph_definition = graph.get_graph()
     assert graph_definition is not None
+    assert len(graph_definition.nodes) > 0

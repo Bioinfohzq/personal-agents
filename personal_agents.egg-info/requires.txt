@@ -1,4 +1,4 @@
-langchain-core
+langchain<2,>=1.3.2
 langchain-openai
-langgraph
+langgraph<2,>=1.2.2
 python-dotenv

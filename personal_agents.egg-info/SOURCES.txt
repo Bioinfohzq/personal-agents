@@ -3,8 +3,6 @@ pyproject.toml
 personal_agent/__init__.py
 personal_agent/config.py
 personal_agent/graph.py
-personal_agent/nodes.py
-personal_agent/state.py
 personal_agents.egg-info/PKG-INFO
 personal_agents.egg-info/SOURCES.txt
 personal_agents.egg-info/dependency_links.txt

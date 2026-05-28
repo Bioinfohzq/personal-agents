@@ -1,15 +1,19 @@
-﻿from langgraph.graph import END, START, StateGraph
+﻿from langchain.agents import create_agent
 
-from personal_agent.nodes import call_model
-from personal_agent.state import AgentState
+from personal_agent.config import load_agent_settings
+
+SYSTEM_PROMPT = (
+    "You are a helpful personal assistant. "
+    "Keep responses concise and accurate."
+)
 
 
 def build_graph():
-    builder = StateGraph(AgentState)
-    builder.add_node("call_model", call_model)
-    builder.add_edge(START, "call_model")
-    builder.add_edge("call_model", END)
-    return builder.compile()
+    settings = load_agent_settings()
+    return create_agent(
+        model=settings.model,
+        system_prompt=SYSTEM_PROMPT,
+    )
 
 
 graph = build_graph()
