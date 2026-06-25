@@ -1,28 +1,23 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, User, Bot, Loader2 } from 'lucide-react';
-import { Client } from '@langchain/langgraph-sdk';
+import { client } from './api/client';
+import type { Message, Thread } from './types/chat';
 
-interface Message {
-  id: string;
-  role: 'user' | 'agent';
-  content: string;
-  isStreaming?: boolean;
-}
-
-// 初始化 LangGraph 官方 SDK 客户端，指向 langgraph dev 默认端口 2024
-const client = new Client({ apiUrl: 'http://localhost:2024' });
+// Components
+import { Sidebar } from './components/Sidebar/Sidebar';
+import { Header } from './components/Header/Header';
+import { MessageList } from './components/Chat/MessageList';
+import { InputArea } from './components/Chat/InputArea';
 
 function App() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      role: 'agent',
-      content: '你好！我是你的智能助理。今天我能为您做些什么？',
-    }
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  
+  // 历史会话管理状态
   const [threadId, setThreadId] = useState<string | null>(null);
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -33,18 +28,88 @@ function App() {
     scrollToBottom();
   }, [messages]);
 
-  // 初始化 Thread
+  // 拉取历史会话列表
+  const fetchThreads = async () => {
+    try {
+      const results = await client.threads.search({ limit: 50 });
+      setThreads(results as Thread[]);
+      return results;
+    } catch (err) {
+      console.error('Failed to fetch threads:', err);
+      return [];
+    }
+  };
+
+  // 加载指定会话的历史消息
+  const loadThread = async (id: string) => {
+    setThreadId(id);
+    setIsLoading(true);
+    try {
+      const state = await client.threads.getState(id);
+      const stateValues = state.values as any;
+      const historyMessages = stateValues?.messages || [];
+      
+      const formattedMessages: Message[] = historyMessages.map((m: any, idx: number) => ({
+        id: m.id || idx.toString(),
+        role: (m.type === 'human' || m.role === 'user') ? 'user' : 'agent',
+        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+      }));
+
+      if (formattedMessages.length === 0) {
+        setMessages([{
+          id: Date.now().toString(),
+          role: 'agent',
+          content: '你好！我是你的AI助理。这是一个空白的历史会话，请问有什么可以帮您？',
+        }]);
+      } else {
+        setMessages(formattedMessages);
+      }
+    } catch (err) {
+      console.error('Failed to load thread state:', err);
+      setMessages([{
+        id: Date.now().toString(),
+        role: 'agent',
+        content: '你好！我是你的AI助理。开启了一个新的会话，今天我能为您做些什么？',
+      }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 创建新会话
+  const createNewThread = async () => {
+    try {
+      setIsLoading(true);
+      const thread = await client.threads.create();
+      setThreadId(thread.thread_id);
+      
+      setMessages([
+        {
+          id: Date.now().toString(),
+          role: 'agent',
+          content: '你好！我是你的AI助理。开启了一个新的会话，今天我能为您做些什么？',
+        }
+      ]);
+
+      await fetchThreads();
+    } catch (err) {
+      console.error('Failed to create thread:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const initThread = async () => {
-      try {
-        const thread = await client.threads.create();
-        setThreadId(thread.thread_id);
-        console.log('LangGraph Thread created:', thread.thread_id);
-      } catch (err) {
-        console.error('Failed to create thread:', err);
+    const initApp = async () => {
+      const existingThreads = await fetchThreads();
+      if (existingThreads.length > 0) {
+        await loadThread(existingThreads[0].thread_id);
+      } else {
+        await createNewThread();
       }
     };
-    initThread();
+    initApp();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSend = async () => {
@@ -56,17 +121,18 @@ function App() {
       content: input.trim()
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    const agentMessageId = (Date.now() + 1).toString();
+
+    setMessages(prev => [
+      ...prev, 
+      userMessage,
+      { id: agentMessageId, role: 'agent', content: '' }
+    ]);
+    
     setInput('');
     setIsLoading(true);
 
     try {
-      const agentMessageId = (Date.now() + 1).toString();
-      // 先在界面上添加一条空的 AI 消息，用于展示打字机效果
-      setMessages(prev => [...prev, { id: agentMessageId, role: 'agent', content: '' }]);
-
-      // 只需要发送最新消息，LangGraph 根据 threadId 维护状态
-      // 将 streamMode 修改为 'messages' 以获取 token 级别的流式输出
       const streamResponse = client.runs.stream(
         threadId,
         'lead_agent',
@@ -80,43 +146,40 @@ function App() {
 
       let finalContent = '';
       
-      // 监听流式返回
       for await (const chunk of streamResponse) {
-        // 在 TypeScript SDK 中，对应 streamMode='messages' 的事件名可能是 'messages/partial'、'messages/complete' 或者是 chunk.event 为 'messages/partial' 等等
-        // 为了安全起见，我们将 chunk 强制断言，并判断其 data 数组
         const c = chunk as any;
-        if (c.event?.startsWith('messages') && Array.isArray(c.data) && c.data.length > 0) {
-          const msgChunk = c.data[0];
-          // 如果是 AI 返回的片段
-          if (msgChunk && (msgChunk.type === 'AIMessageChunk' || msgChunk.type === 'ai' || msgChunk.role === 'assistant')) {
-            const contentPiece = typeof msgChunk.content === 'string' ? msgChunk.content : '';
-            if (contentPiece) {
-              // 对于增量 chunk，将其不断追加到内容中
-              finalContent += contentPiece;
-              // 实时更新对应 ID 的消息内容
-              setMessages(prev => 
-                prev.map(m => m.id === agentMessageId ? { ...m, content: finalContent } : m)
-              );
+        
+        if (c.event === 'messages/partial') {
+          if (Array.isArray(c.data) && c.data.length > 0) {
+            const msgChunk = c.data[0];
+            if (msgChunk && (msgChunk.type === 'AIMessageChunk' || msgChunk.type === 'ai' || msgChunk.role === 'assistant')) {
+              const currentText = typeof msgChunk.content === 'string' ? msgChunk.content : '';
+              
+              if (currentText && currentText !== finalContent) {
+                finalContent = currentText;
+                
+                setMessages(prev => 
+                  prev.map(m => m.id === agentMessageId ? { ...m, content: finalContent } : m)
+                );
+              }
             }
           }
         }
       }
 
       if (!finalContent) {
-        // 如果最终没有任何内容，给出提示
         setMessages(prev => 
           prev.map(m => m.id === agentMessageId ? { ...m, content: '抱歉，没有收到回复。' } : m)
         );
       }
 
+      await fetchThreads();
+
     } catch (error) {
       console.error('发送消息失败:', error);
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'agent',
-        content: '抱歉，服务似乎出现了一些问题，请稍后再试。'
-      };
-      setMessages(prev => [...prev, errorMessage]);
+      setMessages(prev => 
+        prev.map(m => m.id === agentMessageId ? { ...m, content: '抱歉，服务似乎出现了一些问题，请稍后再试。' } : m)
+      );
     } finally {
       setIsLoading(false);
     }
@@ -130,92 +193,37 @@ function App() {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b shadow-sm px-6 py-4 flex items-center justify-between shrink-0">
-        <div className="flex items-center space-x-3">
-          <div className="bg-blue-600 p-2 rounded-lg">
-            <Bot className="w-6 h-6 text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-semibold text-gray-800">AI助理</h1>
-            <p className="text-sm text-gray-500">正在运行</p>
-          </div>
-        </div>
-      </header>
+    <div className="flex h-screen bg-gray-50 overflow-hidden w-full">
+      <Sidebar 
+        isOpen={isSidebarOpen}
+        threads={threads}
+        currentThreadId={threadId}
+        isLoading={isLoading}
+        onSelectThread={loadThread}
+      />
 
-      {/* Chat Area */}
-      <main className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
-        <div className="max-w-4xl mx-auto space-y-6">
-          {messages.map((message) => (
-            <div
-              key={message.id}
-              className={`flex items-start space-x-4 ${
-                message.role === 'user' ? 'flex-row-reverse space-x-reverse' : 'flex-row'
-              }`}
-            >
-              <div
-                className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
-                  message.role === 'user' ? 'bg-blue-100 text-blue-600' : 'bg-gray-200 text-gray-600'
-                }`}
-              >
-                {message.role === 'user' ? <User size={20} /> : <Bot size={20} />}
-              </div>
-              <div
-                className={`max-w-[80%] rounded-2xl px-5 py-3 ${
-                  message.role === 'user'
-                    ? 'bg-blue-600 text-white rounded-tr-none'
-                    : 'bg-white border text-gray-800 rounded-tl-none shadow-sm'
-                }`}
-              >
-                <div className="whitespace-pre-wrap leading-relaxed">{message.content}</div>
-              </div>
-            </div>
-          ))}
-          {isLoading && (
-            <div className="flex items-start space-x-4">
-              <div className="w-10 h-10 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center shrink-0">
-                <Bot size={20} />
-              </div>
-              <div className="bg-white border text-gray-800 rounded-2xl rounded-tl-none px-5 py-3 shadow-sm flex items-center space-x-2">
-                <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
-                <span className="text-gray-500 text-sm">正在思考...</span>
-              </div>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-      </main>
+      <div className="flex-1 flex flex-col min-w-0 bg-white">
+        <Header 
+          isSidebarOpen={isSidebarOpen}
+          isLoading={isLoading}
+          onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+          onCreateThread={createNewThread}
+        />
 
-      {/* Input Area */}
-      <footer className="bg-white border-t p-4 sm:p-6 shrink-0">
-        <div className="max-w-4xl mx-auto flex items-end space-x-4">
-          <div className="flex-1 relative">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="输入消息，按 Enter 发送，Shift + Enter 换行..."
-              className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 pr-12 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white resize-none"
-              rows={1}
-              style={{
-                minHeight: '52px',
-                maxHeight: '200px'
-              }}
-            />
-            <button
-              onClick={handleSend}
-              disabled={!input.trim() || isLoading}
-              className="absolute right-3 bottom-3 text-blue-600 p-1 rounded-md hover:bg-blue-50 disabled:text-gray-400 disabled:hover:bg-transparent transition-colors"
-            >
-              <Send size={20} />
-            </button>
-          </div>
-        </div>
-        <div className="text-center mt-3 text-xs text-gray-400">
-          AI 生成的内容可能不准确，请注意甄别。
-        </div>
-      </footer>
+        <MessageList 
+          messages={messages}
+          isLoading={isLoading}
+          messagesEndRef={messagesEndRef}
+        />
+
+        <InputArea 
+          input={input}
+          isLoading={isLoading}
+          onInputChange={setInput}
+          onSend={handleSend}
+          onKeyDown={handleKeyDown}
+        />
+      </div>
     </div>
   );
 }
