@@ -25,7 +25,7 @@
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
-      "module": "langgraph_cli.cli",
+      "program": "${workspaceFolder}\\.venv\\Scripts\\langgraph.exe",
       "args": [
         "dev",
         "--host",
