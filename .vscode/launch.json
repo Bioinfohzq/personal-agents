@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "LangGraph: dev server",
+      "name": "LangGraph: dev server (macOS/Linux)",
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/.venv/bin/python",
@@ -12,12 +12,57 @@
         "--host",
         "127.0.0.1",
         "--port",
-        "2024"
+        "2024",
+        "--no-browser"
       ],
       "cwd": "${workspaceFolder}",
       "envFile": "${workspaceFolder}/.env",
       "console": "integratedTerminal",
       "justMyCode": false
+    },
+    {
+      "name": "LangGraph: dev server (Windows)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "module": "langgraph_cli.cli",
+      "args": [
+        "dev",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "2024",
+        "--no-browser"
+      ],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}\\.env",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "Frontend: dev server",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "pnpm run dev",
+      "cwd": "${workspaceFolder}/front"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Full stack (macOS/Linux)",
+      "configurations": [
+        "LangGraph: dev server (macOS/Linux)",
+        "Frontend: dev server"
+      ],
+      "stopAll": true
+    },
+    {
+      "name": "Full stack (Windows)",
+      "configurations": [
+        "LangGraph: dev server (Windows)",
+        "Frontend: dev server"
+      ],
+      "stopAll": true
     }
   ]
 }
