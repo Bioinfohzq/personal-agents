@@ -20,7 +20,6 @@ venv/
 !.env.example
 
 # IDE / OS
-.vscode/
 .idea/
 .DS_Store
 Thumbs.db
