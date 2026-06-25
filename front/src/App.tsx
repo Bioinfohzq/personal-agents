@@ -61,7 +61,12 @@ function App() {
     setIsLoading(true);
 
     try {
+      const agentMessageId = (Date.now() + 1).toString();
+      // 先在界面上添加一条空的 AI 消息，用于展示打字机效果
+      setMessages(prev => [...prev, { id: agentMessageId, role: 'agent', content: '' }]);
+
       // 只需要发送最新消息，LangGraph 根据 threadId 维护状态
+      // 将 streamMode 修改为 'messages' 以获取 token 级别的流式输出
       const streamResponse = client.runs.stream(
         threadId,
         'lead_agent',
@@ -69,7 +74,7 @@ function App() {
           input: {
             messages: [{ role: 'user', content: userMessage.content }]
           },
-          streamMode: 'values',
+          streamMode: 'messages',
         }
       );
 
@@ -77,26 +82,31 @@ function App() {
       
       // 监听流式返回
       for await (const chunk of streamResponse) {
-        // chunk.data 在 streamMode='values' 时，包含整个状态
-        const stateData = chunk.data as any;
-        if (stateData && stateData.messages && Array.isArray(stateData.messages) && stateData.messages.length > 0) {
-          const latestMessage = stateData.messages[stateData.messages.length - 1];
-          if (latestMessage.type === 'ai' || latestMessage.role === 'assistant') {
-            // 根据 langchain 的 Message 对象格式，可能是 type 或是 role
-            finalContent = typeof latestMessage.content === 'string' ? latestMessage.content : JSON.stringify(latestMessage.content);
+        // 在 TypeScript SDK 中，对应 streamMode='messages' 的事件名可能是 'messages/partial'、'messages/complete' 或者是 chunk.event 为 'messages/partial' 等等
+        // 为了安全起见，我们将 chunk 强制断言，并判断其 data 数组
+        const c = chunk as any;
+        if (c.event?.startsWith('messages') && Array.isArray(c.data) && c.data.length > 0) {
+          const msgChunk = c.data[0];
+          // 如果是 AI 返回的片段
+          if (msgChunk && (msgChunk.type === 'AIMessageChunk' || msgChunk.type === 'ai' || msgChunk.role === 'assistant')) {
+            const contentPiece = typeof msgChunk.content === 'string' ? msgChunk.content : '';
+            if (contentPiece) {
+              // 对于增量 chunk，将其不断追加到内容中
+              finalContent += contentPiece;
+              // 实时更新对应 ID 的消息内容
+              setMessages(prev => 
+                prev.map(m => m.id === agentMessageId ? { ...m, content: finalContent } : m)
+              );
+            }
           }
         }
       }
 
-      if (finalContent) {
-        const agentMessage: Message = {
-          id: (Date.now() + 1).toString(),
-          role: 'agent',
-          content: finalContent
-        };
-        setMessages(prev => [...prev, agentMessage]);
-      } else {
-        throw new Error('No AI message returned');
+      if (!finalContent) {
+        // 如果最终没有任何内容，给出提示
+        setMessages(prev => 
+          prev.map(m => m.id === agentMessageId ? { ...m, content: '抱歉，没有收到回复。' } : m)
+        );
       }
 
     } catch (error) {
@@ -128,7 +138,7 @@ function App() {
             <Bot className="w-6 h-6 text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-semibold text-gray-800">个人智能体 (Personal Agent)</h1>
+            <h1 className="text-xl font-semibold text-gray-800">AI助理</h1>
             <p className="text-sm text-gray-500">正在运行</p>
           </div>
         </div>
