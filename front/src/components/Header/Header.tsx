@@ -1,13 +1,16 @@
 import { Bot, PanelLeftClose, PanelLeftOpen, PlusCircle } from 'lucide-react';
+import type { AuthUser } from '../../api/auth';
 
 interface HeaderProps {
   isSidebarOpen: boolean;
   isLoading: boolean;
+  currentUser: AuthUser;
   onToggleSidebar: () => void;
   onCreateThread: () => void;
+  onLogout: () => void;
 }
 
-export function Header({ isSidebarOpen, isLoading, onToggleSidebar, onCreateThread }: HeaderProps) {
+export function Header({ isSidebarOpen, isLoading, currentUser, onToggleSidebar, onCreateThread, onLogout }: HeaderProps) {
   return (
     <header className="bg-white border-b shadow-sm px-4 py-3 flex items-center justify-between shrink-0 h-[68px]">
       <div className="flex items-center space-x-3">
@@ -32,14 +35,23 @@ export function Header({ isSidebarOpen, isLoading, onToggleSidebar, onCreateThre
         </div>
       </div>
 
-      <button
-        onClick={onCreateThread}
-        disabled={isLoading}
-        className="flex items-center space-x-1.5 px-3 py-2 bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap ml-4"
-      >
-        <PlusCircle className="w-4 h-4" />
-        <span>新建会话</span>
-      </button>
+      <div className="flex items-center gap-3">
+        <span className="hidden md:inline text-sm text-gray-500">{currentUser.username}</span>
+        <button
+          onClick={onCreateThread}
+          disabled={isLoading}
+          className="flex items-center space-x-1.5 px-3 py-2 bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+        >
+          <PlusCircle className="w-4 h-4" />
+          <span>新建会话</span>
+        </button>
+        <button
+          onClick={onLogout}
+          className="px-3 py-2 bg-white hover:bg-red-50 border border-gray-200 text-gray-600 hover:text-red-600 rounded-lg text-sm font-medium transition-colors"
+        >
+          退出
+        </button>
+      </div>
     </header>
   );
 }

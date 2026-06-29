@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { client } from './api/client';
+import { clearStoredSession, readStoredSession, type AuthSession } from './api/auth';
 import type { Message, Thread } from './types/chat';
 
 // Components
@@ -7,8 +8,10 @@ import { Sidebar } from './components/Sidebar/Sidebar';
 import { Header } from './components/Header/Header';
 import { MessageList } from './components/Chat/MessageList';
 import { InputArea } from './components/Chat/InputArea';
+import { LoginPage } from './components/Auth/LoginPage';
 
 function App() {
+  const [session, setSession] = useState<AuthSession | null>(() => readStoredSession());
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -100,6 +103,10 @@ function App() {
   };
 
   useEffect(() => {
+    if (!session) {
+      return;
+    }
+
     const initApp = async () => {
       const existingThreads = await fetchThreads();
       if (existingThreads.length > 0) {
@@ -110,7 +117,15 @@ function App() {
     };
     initApp();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [session]);
+
+  const handleLogout = () => {
+    clearStoredSession();
+    setSession(null);
+    setMessages([]);
+    setThreads([]);
+    setThreadId(null);
+  };
 
   const handleSend = async () => {
     if (!input.trim() || isLoading || !threadId) return;
@@ -192,6 +207,10 @@ function App() {
     }
   };
 
+  if (!session) {
+    return <LoginPage onLogin={setSession} />;
+  }
+
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden w-full">
       <Sidebar 
@@ -206,8 +225,10 @@ function App() {
         <Header 
           isSidebarOpen={isSidebarOpen}
           isLoading={isLoading}
+          currentUser={session.user}
           onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
           onCreateThread={createNewThread}
+          onLogout={handleLogout}
         />
 
         <MessageList 

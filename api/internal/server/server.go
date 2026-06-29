@@ -25,15 +25,16 @@ func New(cfg config.Config, store *database.Store) *Server {
 func (server *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	authHandler := auth.NewHandler()
+	authHandler := auth.NewHandler(server.store, server.cfg.Auth)
 	userHandler := user.NewHandler()
 
 	mux.HandleFunc("/healthz", server.handleHealth)
 	mux.HandleFunc("/api/v1/health", server.handleHealth)
 	mux.HandleFunc("/api/v1/auth/login", authHandler.Login)
+	mux.HandleFunc("/api/v1/auth/register", authHandler.Register)
 	mux.Handle("/api/v1/users/me", middleware.RequireAuth(http.HandlerFunc(userHandler.Me)))
 
-	return middleware.Recover(middleware.RequestLog(mux))
+	return middleware.Recover(middleware.CORS(middleware.RequestLog(mux)))
 }
 
 func (server *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -43,9 +44,9 @@ func (server *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":              "ok",
-		"service":             server.cfg.AppName,
-		"env":                 server.cfg.Env,
-		"database_configured": server.store.Configured(),
+		"status":             "ok",
+		"service":            server.cfg.AppName,
+		"env":                server.cfg.Env,
+		"database_connected": server.store.Configured(),
 	})
 }

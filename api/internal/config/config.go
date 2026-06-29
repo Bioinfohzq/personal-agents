@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -13,6 +15,7 @@ type Config struct {
 	Host     string
 	Port     string
 	Database DatabaseConfig
+	Auth     AuthConfig
 }
 
 type DatabaseConfig struct {
@@ -27,24 +30,43 @@ type DatabaseConfig struct {
 	DSN       string
 }
 
+type AuthConfig struct {
+	JWTSecret       string
+	TokenTTLMinutes string
+}
+
+func (cfg AuthConfig) TokenTTL() time.Duration {
+	minutes, err := strconv.Atoi(cfg.TokenTTLMinutes)
+	if err != nil || minutes <= 0 {
+		minutes = 10080
+	}
+
+	return time.Duration(minutes) * time.Minute
+}
+
 func Load() Config {
 	fileConfig := loadLocalYAML()
+	databaseConfig := DatabaseConfig{
+		Driver:    getEnv("DATABASE_DRIVER", valueOrDefault(fileConfig.Database.Driver, "mysql")),
+		Host:      getEnv("DATABASE_HOST", fileConfig.Database.Host),
+		Port:      getEnv("DATABASE_PORT", fileConfig.Database.Port),
+		Username:  getEnv("DATABASE_USERNAME", fileConfig.Database.Username),
+		Password:  getEnv("DATABASE_PASSWORD", fileConfig.Database.Password),
+		Name:      getEnv("DATABASE_NAME", fileConfig.Database.Name),
+		ParseTime: getEnv("DATABASE_PARSE_TIME", valueOrDefault(fileConfig.Database.ParseTime, "true")),
+		Loc:       getEnv("DATABASE_LOC", valueOrDefault(fileConfig.Database.Loc, "Local")),
+	}
+	databaseConfig.DSN = getEnv("DATABASE_DSN", buildDatabaseDSN(databaseConfig))
 
 	return Config{
-		AppName: getEnv("APP_NAME", valueOrDefault(fileConfig.AppName, "personal-agents-api")),
-		Env:     getEnv("APP_ENV", valueOrDefault(fileConfig.Env, "local")),
-		Host:    getEnv("API_HOST", valueOrDefault(fileConfig.Host, "127.0.0.1")),
-		Port:    getEnv("API_PORT", valueOrDefault(fileConfig.Port, "8080")),
-		Database: DatabaseConfig{
-			Driver:    getEnv("DATABASE_DRIVER", valueOrDefault(fileConfig.Database.Driver, "mysql")),
-			Host:      getEnv("DATABASE_HOST", fileConfig.Database.Host),
-			Port:      getEnv("DATABASE_PORT", fileConfig.Database.Port),
-			Username:  getEnv("DATABASE_USERNAME", fileConfig.Database.Username),
-			Password:  getEnv("DATABASE_PASSWORD", fileConfig.Database.Password),
-			Name:      getEnv("DATABASE_NAME", fileConfig.Database.Name),
-			ParseTime: getEnv("DATABASE_PARSE_TIME", valueOrDefault(fileConfig.Database.ParseTime, "true")),
-			Loc:       getEnv("DATABASE_LOC", valueOrDefault(fileConfig.Database.Loc, "Local")),
-			DSN:       getEnv("DATABASE_DSN", buildDatabaseDSN(fileConfig.Database)),
+		AppName:  getEnv("APP_NAME", valueOrDefault(fileConfig.AppName, "personal-agents-api")),
+		Env:      getEnv("APP_ENV", valueOrDefault(fileConfig.Env, "local")),
+		Host:     getEnv("API_HOST", valueOrDefault(fileConfig.Host, "127.0.0.1")),
+		Port:     getEnv("API_PORT", valueOrDefault(fileConfig.Port, "8080")),
+		Database: databaseConfig,
+		Auth: AuthConfig{
+			JWTSecret:       getEnv("AUTH_JWT_SECRET", fileConfig.Auth.JWTSecret),
+			TokenTTLMinutes: getEnv("AUTH_TOKEN_TTL_MINUTES", valueOrDefault(fileConfig.Auth.TokenTTLMinutes, "10080")),
 		},
 	}
 }
@@ -161,6 +183,13 @@ func assignYAMLValue(cfg *Config, section string, key string, value string) {
 			cfg.Database.Loc = value
 		case "dsn":
 			cfg.Database.DSN = value
+		}
+	case "auth":
+		switch key {
+		case "jwt_secret":
+			cfg.Auth.JWTSecret = value
+		case "token_ttl_minutes":
+			cfg.Auth.TokenTTLMinutes = value
 		}
 	}
 }

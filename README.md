@@ -95,7 +95,7 @@ pnpm run lint
 
 ## 业务 API
 
-业务 API 位于 `api/`，使用 Go 开发，负责用户、登录、权限、业务配置和数据库访问。当前阶段先提供服务骨架和健康检查，MySQL 连接与用户表迁移会在本地数据库方案确定后接入。
+业务 API 位于 `api/`，使用 Go 开发，负责用户、登录、权限、业务配置和数据库访问。服务启动时会连接 MySQL，并自动应用 `api/migrations/*.up.sql` 中尚未执行过的迁移脚本；如果配置缺失或数据库不可用，服务会启动失败。
 
 首次本地开发可先复制配置模板：
 ```powershell
@@ -131,6 +131,8 @@ http://127.0.0.1:8080
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8080/healthz
 ```
+
+用户注册会通过 `POST /api/v1/auth/register` 写入 `users` 表，密码会以 `bcrypt` 哈希保存，不会保存明文密码。
 
 ## 桌面客户端
 

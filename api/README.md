@@ -76,4 +76,43 @@ database:
   loc: Local
 ```
 
-当前数据库层只预留配置入口，不会强制连接 MySQL。等本地 Docker MySQL 确定后，再接入真实驱动、迁移工具和用户表。
+当前数据库层会在服务启动时连接 MySQL、执行连通性检查，并自动应用 `migrations/*.up.sql` 中尚未执行过的迁移脚本；如果配置缺失或数据库不可用，服务会启动失败。
+
+## 用户注册与登录
+
+服务启动时会自动创建 `schema_migrations` 表并执行 `migrations/000001_create_users_table.up.sql`，因此不需要手动建 `users` 表。
+
+注册接口：
+
+```text
+POST /api/v1/auth/register
+```
+
+请求体：
+
+```json
+{
+  "username": "alice",
+  "email": "alice@example.com",
+  "password": "your-password"
+}
+```
+
+注册成功后会写入 `users` 表，并返回 token 和用户信息。
+
+登录接口：
+
+```text
+POST /api/v1/auth/login
+```
+
+请求体：
+
+```json
+{
+  "account": "username-or-email",
+  "password": "plain-password"
+}
+```
+
+后端会使用 `bcrypt` 保存密码哈希，不会保存明文密码。

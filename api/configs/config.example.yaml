@@ -17,3 +17,7 @@ database:
   name: "<mysql_database>"
   parse_time: true
   loc: Local
+
+auth:
+  jwt_secret: "<replace_with_a_long_random_secret>"
+  token_ttl_minutes: 10080

@@ -12,12 +12,27 @@ import (
 
 	"personal-agents/api/internal/config"
 	"personal-agents/api/internal/database"
+	"personal-agents/api/internal/migration"
 	"personal-agents/api/internal/server"
 )
 
 func main() {
 	cfg := config.Load()
-	db := database.New(cfg.Database)
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer startupCancel()
+
+	db, err := database.New(startupCtx, cfg.Database)
+	if err != nil {
+		slog.Error("database connection failed", "error", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	if err := migration.Apply(startupCtx, db.DB()); err != nil {
+		slog.Error("database migration failed", "error", err)
+		os.Exit(1)
+	}
+
 	app := server.New(cfg, db)
 
 	httpServer := &http.Server{

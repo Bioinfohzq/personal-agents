@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { KeyboardEvent } from 'react';
+import type { FormEvent, KeyboardEvent } from 'react';
+import { BUSINESS_API_URL, clearStoredSession, login, readStoredSession, register, storeSession, type AuthSession } from './lib/auth';
 import { ASSISTANT_ID, LANGGRAPH_API_URL, langGraphClient } from './lib/langgraph';
 import type { ChatMessage, ChatThread } from './types';
 import './styles.css';
@@ -46,6 +47,14 @@ function formatThreadTime(thread: ChatThread): string {
 }
 
 function App() {
+  const [session, setSession] = useState<AuthSession | null>(() => readStoredSession());
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
+  const [account, setAccount] = useState('');
+  const [password, setPassword] = useState('');
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([welcomeMessage]);
@@ -106,6 +115,10 @@ function App() {
 
   useEffect(() => {
     async function initialize() {
+      if (!session) {
+        return;
+      }
+
       try {
         const existingThreads = await refreshThreads();
 
@@ -123,7 +136,49 @@ function App() {
     }
 
     void initialize();
-  }, []);
+  }, [session]);
+
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (authMode === 'login' && (!account.trim() || !password)) {
+      setLoginError('请输入账号和密码');
+      return;
+    }
+
+    if (authMode === 'register' && (!username.trim() || !email.trim() || !password)) {
+      setLoginError('请输入用户名、邮箱和密码');
+      return;
+    }
+
+    if (authMode === 'register' && password.length < 8) {
+      setLoginError('密码至少需要 8 位');
+      return;
+    }
+
+    setIsLoggingIn(true);
+    setLoginError(null);
+
+    try {
+      const nextSession = authMode === 'login'
+        ? await login(account.trim(), password)
+        : await register(username.trim(), email.trim(), password);
+      storeSession(nextSession);
+      setSession(nextSession);
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : '登录失败');
+    } finally {
+      setIsLoggingIn(false);
+    }
+  }
+
+  function handleLogout() {
+    clearStoredSession();
+    setSession(null);
+    setThreads([]);
+    setCurrentThreadId(null);
+    setMessages([welcomeMessage]);
+  }
 
   async function sendMessage() {
     const content = input.trim();
@@ -210,6 +265,86 @@ function App() {
     }
   }
 
+  if (!session) {
+    return (
+      <main className="login-shell">
+        <section className="login-card">
+          <p className="eyebrow">Business API</p>
+          <h1>{authMode === 'login' ? '登录 Personal Agents' : '注册 Personal Agents'}</h1>
+          <p className="login-hint">
+            {authMode === 'login' ? '登录后进入桌面客户端。' : '注册成功后会自动登录。'}
+            当前业务 API：{BUSINESS_API_URL}
+          </p>
+
+          <form className="login-form" onSubmit={handleLogin}>
+            {authMode === 'login' ? (
+              <label>
+                <span>账号 / 邮箱</span>
+                <input
+                  value={account}
+                  onChange={(event) => setAccount(event.target.value)}
+                  autoComplete="username"
+                  placeholder="请输入账号或邮箱"
+                />
+              </label>
+            ) : (
+              <>
+                <label>
+                  <span>用户名</span>
+                  <input
+                    value={username}
+                    onChange={(event) => setUsername(event.target.value)}
+                    autoComplete="username"
+                    placeholder="请输入用户名"
+                  />
+                </label>
+
+                <label>
+                  <span>邮箱</span>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    autoComplete="email"
+                    placeholder="请输入邮箱"
+                  />
+                </label>
+              </>
+            )}
+
+            <label>
+              <span>密码</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete="current-password"
+                placeholder="请输入密码"
+              />
+            </label>
+
+            {loginError ? <p className="login-error">{loginError}</p> : null}
+
+            <button type="submit" disabled={isLoggingIn}>
+              {isLoggingIn ? '处理中...' : authMode === 'login' ? '登录' : '注册并登录'}
+            </button>
+          </form>
+
+          <button
+            className="auth-switch-button"
+            type="button"
+            onClick={() => {
+              setAuthMode(authMode === 'login' ? 'register' : 'login');
+              setLoginError(null);
+            }}
+          >
+            {authMode === 'login' ? '没有账号？立即注册' : '已有账号？返回登录'}
+          </button>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -224,6 +359,10 @@ function App() {
         <button className="new-thread-button" type="button" onClick={createThread} disabled={isLoading}>
           新建会话
         </button>
+        <div className="user-panel">
+          <span>{session.user.username}</span>
+          <button type="button" onClick={handleLogout}>退出登录</button>
+        </div>
 
         <div className="thread-list">
           {threads.length === 0 ? (
