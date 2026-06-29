@@ -8,6 +8,7 @@
 
 - `/lead_agent`: 核心智能体图结构逻辑（LangGraph）。
 - `/front`: React 前端交互项目界面。
+- `/desktop`: 基于 React + TypeScript + Tauri 2 的桌面客户端，默认连接本机 LangGraph API。
 - `langgraph.json`: LangGraph 服务的配置文件。
 - `Makefile` & `start_services.sh`: macOS/Linux 下的项目脚手架与一键启停管理脚本。
 - `.vscode/launch.json`: VS Code 调试配置，包含 Windows 下启动 LangGraph 后端的配置。
@@ -83,4 +84,70 @@ Windows PowerShell 下可直接执行对应命令：
 cd front
 pnpm run build
 pnpm run lint
+```
+
+## 桌面客户端
+
+桌面端位于 `desktop/`，是一个独立的 React + Vite + Tauri 2 应用。第一版默认连接 `http://localhost:2024` 的 LangGraph 服务，并使用 `lead_agent` 作为 assistant id。依赖管理统一使用 `pnpm`，不要在 `desktop/` 下混用 `npm install` 或 `yarn`。
+
+### 桌面端环境要求
+
+桌面客户端基于 Tauri 2，因此**开发、调试和打包桌面应用时，本机必须安装 Rust/Cargo 环境**。只运行 Web 前端不需要 Rust；执行 `pnpm run tauri:dev` 或 `pnpm run tauri:build` 时需要 Rust。
+
+macOS 可先安装 Xcode Command Line Tools：
+```bash
+xcode-select --install
+```
+
+然后安装 Rust：
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+安装后重新打开终端，确认 Cargo 可用：
+```bash
+cargo --version
+```
+
+macOS 自带 WebKit/WebView 能力，通常不需要额外安装 WebView 运行时。打包 `.dmg` 或签名、公证时，还需要根据 Apple 分发方式配置证书和开发者账号。
+
+Windows 可先安装 Rust：
+```powershell
+winget install Rustlang.Rustup
+```
+
+安装后新开一个终端，确认 Cargo 可用：
+```powershell
+cargo --version
+```
+
+Windows 打包 Tauri 应用还需要 Visual Studio Build Tools，并勾选“使用 C++ 的桌面开发”。Windows 10/11 通常已内置 WebView2 Runtime，如缺失需从微软官方安装。
+
+首次安装依赖：
+```powershell
+cd desktop
+pnpm install
+```
+
+开发时先启动 LangGraph 后端，再启动桌面客户端：
+```powershell
+# 在项目根目录启动 LangGraph 服务
+uv run langgraph dev
+
+# 新开终端启动桌面客户端
+cd desktop
+pnpm run tauri:dev
+```
+
+如果需要覆盖服务地址或 assistant id，可在启动前设置环境变量：
+```powershell
+$env:VITE_LANGGRAPH_API_URL = "http://localhost:2024"
+$env:VITE_LANGGRAPH_ASSISTANT_ID = "lead_agent"
+pnpm run tauri:dev
+```
+
+生产构建：
+```powershell
+cd desktop
+pnpm run tauri:build
 ```
