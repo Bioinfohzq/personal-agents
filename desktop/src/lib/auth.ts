@@ -18,6 +18,15 @@ interface LoginResponse {
   user: AuthUser;
 }
 
+async function readErrorMessage(response: Response, fallback: string): Promise<string> {
+  try {
+    const data = await response.json() as { error?: string };
+    return data.error ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export function readStoredSession(): AuthSession | null {
   const rawSession = localStorage.getItem(SESSION_STORAGE_KEY);
   if (!rawSession) {
@@ -50,7 +59,7 @@ export async function login(account: string, password: string): Promise<AuthSess
   });
 
   if (!response.ok) {
-    throw new Error('账号或密码错误');
+    throw new Error(await readErrorMessage(response, '账号或密码错误'));
   }
 
   const data = await response.json() as LoginResponse;
@@ -70,7 +79,7 @@ export async function register(username: string, email: string, password: string
   });
 
   if (!response.ok) {
-    throw new Error(response.status === 409 ? '用户名或邮箱已存在' : '注册失败');
+    throw new Error(await readErrorMessage(response, response.status === 409 ? '用户名或邮箱已存在' : '注册失败'));
   }
 
   const data = await response.json() as LoginResponse;
