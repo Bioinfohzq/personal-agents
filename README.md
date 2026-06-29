@@ -1,12 +1,14 @@
 ﻿# Personal Agents (AI 助理全栈项目)
 
 这是一个全栈式的个人智能体（AI Assistant）项目。
-- **后端**：基于 LangChain `create_agent` 和 LangGraph 构建的 Lead Agent 服务，使用 `uv` 管理 Python 依赖。
+- **智能体后端**：基于 LangChain `create_agent` 和 LangGraph 构建的 Lead Agent 服务，使用 `uv` 管理 Python 依赖。
+- **业务后端**：基于 Go 构建的 API 服务，用于承载用户、登录、权限、业务配置和数据库访问。
 - **前端**：基于 React + Vite + Tailwind CSS v4 构建的现代化 Web 交互界面，使用官方 `@langchain/langgraph-sdk` 直连后端，支持打字机流式输出。
 
 ## 项目结构
 
 - `/lead_agent`: 核心智能体图结构逻辑（LangGraph）。
+- `/api`: Go 业务后端，负责用户、登录、权限、配置和数据库访问。
 - `/front`: React 前端交互项目界面。
 - `/desktop`: 基于 React + TypeScript + Tauri 2 的桌面客户端，默认连接本机 LangGraph API。
 - `langgraph.json`: LangGraph 服务的配置文件。
@@ -19,6 +21,7 @@
 
 确保您的本地开发环境已经安装了：
 - `uv` (Python 现代包管理器)
+- `Go` (业务后端运行环境)
 - `pnpm` (Node.js 现代包管理器)
 
 ### 2. 环境初始化
@@ -31,6 +34,9 @@ make setup
 Windows PowerShell 可分别执行：
 ```powershell
 uv sync
+cd api
+go mod download
+cd ..
 cd front
 pnpm install
 cd ..
@@ -68,6 +74,7 @@ pnpm run dev
 
 启动成功后，您可以通过以下地址访问：
 - **前端 AI 助理界面**: [http://localhost:5173](http://localhost:5173)
+- **业务 API 服务**: [http://127.0.0.1:8080/healthz](http://127.0.0.1:8080/healthz)
 - **后端 LangGraph API**: [http://localhost:2024](http://localhost:2024)
 - **LangGraph Studio UI**: [https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024](https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024)
 
@@ -84,6 +91,26 @@ Windows PowerShell 下可直接执行对应命令：
 cd front
 pnpm run build
 pnpm run lint
+```
+
+## 业务 API
+
+业务 API 位于 `api/`，使用 Go 开发，负责用户、登录、权限、业务配置和数据库访问。当前阶段先提供服务骨架和健康检查，MySQL 连接与用户表迁移会在本地数据库方案确定后接入。
+
+本地启动：
+```powershell
+cd api
+go run ./cmd/server
+```
+
+默认监听：
+```text
+http://127.0.0.1:8080
+```
+
+健康检查：
+```powershell
+Invoke-RestMethod http://127.0.0.1:8080/healthz
 ```
 
 ## 桌面客户端
