@@ -97,6 +97,25 @@ pnpm run lint
 
 业务 API 位于 `api/`，使用 Go 开发，负责用户、登录、权限、业务配置和数据库访问。当前阶段先提供服务骨架和健康检查，MySQL 连接与用户表迁移会在本地数据库方案确定后接入。
 
+首次本地开发可先复制配置模板：
+```powershell
+cd api
+Copy-Item configs/config.example.yaml configs/config.yaml
+```
+
+然后编辑 `api/configs/config.yaml`，填入本地 MySQL 地址：
+```yaml
+database:
+  driver: mysql
+  host: 127.0.0.1
+  port: 3306
+  username: "<mysql_user>"
+  password: "<mysql_password>"
+  name: "<mysql_database>"
+  parse_time: true
+  loc: Local
+```
+
 本地启动：
 ```powershell
 cd api

@@ -1,3 +1,3 @@
 module personal-agents/api
 
-go 1.22
+go 1.25.2

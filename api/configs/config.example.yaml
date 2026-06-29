@@ -1,0 +1,19 @@
+# Copy this file to api/configs/config.yaml for local development.
+# Do not commit config.yaml because it may contain database credentials.
+
+app_name: personal-agents-api
+env: local
+
+api:
+  host: 127.0.0.1
+  port: 8080
+
+database:
+  driver: mysql
+  host: 127.0.0.1
+  port: 3306
+  username: "<mysql_user>"
+  password: "<mysql_password>"
+  name: "<mysql_database>"
+  parse_time: true
+  loc: Local

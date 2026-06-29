@@ -16,6 +16,7 @@ venv/
 
 # Go
 api/bin/
+api/configs/config.yaml
 
 # Environment files
 .env
