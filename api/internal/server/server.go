@@ -7,6 +7,7 @@ import (
 	"personal-agents/api/internal/config"
 	"personal-agents/api/internal/database"
 	"personal-agents/api/internal/middleware"
+	"personal-agents/api/internal/passwordbook"
 	"personal-agents/api/internal/user"
 )
 
@@ -26,13 +27,16 @@ func (server *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	authHandler := auth.NewHandler(server.store, server.cfg.Auth)
+	passwordbookHandler := passwordbook.NewHandler(server.store, server.cfg.Auth.JWTSecret)
 	userHandler := user.NewHandler()
 
 	mux.HandleFunc("/healthz", server.handleHealth)
 	mux.HandleFunc("/api/v1/health", server.handleHealth)
 	mux.HandleFunc("/api/v1/auth/login", authHandler.Login)
 	mux.HandleFunc("/api/v1/auth/register", authHandler.Register)
-	mux.Handle("/api/v1/users/me", middleware.RequireAuth(http.HandlerFunc(userHandler.Me)))
+	mux.Handle("/api/v1/users/me", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(userHandler.Me)))
+	mux.Handle("/api/v1/passwordbook/items", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(passwordbookHandler.Items)))
+	mux.Handle("/api/v1/passwordbook/items/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(passwordbookHandler.Item)))
 
 	return middleware.Recover(middleware.CORS(middleware.RequestLog(mux)))
 }

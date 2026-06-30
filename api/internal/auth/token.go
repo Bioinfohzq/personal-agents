@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 )
 
 type TokenClaims struct {
@@ -42,6 +43,54 @@ func SignToken(claims TokenClaims, secret string) (string, error) {
 	signature := signHS256(signingInput, secret)
 
 	return signingInput + "." + signature, nil
+}
+
+func VerifyToken(token string, secret string) (TokenClaims, error) {
+	if secret == "" {
+		return TokenClaims{}, errors.New("jwt secret is required")
+	}
+
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return TokenClaims{}, errors.New("invalid token format")
+	}
+
+	signingInput := parts[0] + "." + parts[1]
+	expectedSignature := signHS256(signingInput, secret)
+	if !hmac.Equal([]byte(parts[2]), []byte(expectedSignature)) {
+		return TokenClaims{}, errors.New("invalid token signature")
+	}
+
+	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return TokenClaims{}, err
+	}
+
+	var header struct {
+		Algorithm string `json:"alg"`
+		Type      string `json:"typ"`
+	}
+	if err := json.Unmarshal(headerJSON, &header); err != nil {
+		return TokenClaims{}, err
+	}
+	if header.Algorithm != "HS256" || header.Type != "JWT" {
+		return TokenClaims{}, errors.New("unsupported token header")
+	}
+
+	claimsJSON, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return TokenClaims{}, err
+	}
+
+	var claims TokenClaims
+	if err := json.Unmarshal(claimsJSON, &claims); err != nil {
+		return TokenClaims{}, err
+	}
+	if claims.UserID <= 0 || claims.ExpiresAt <= time.Now().Unix() {
+		return TokenClaims{}, errors.New("token expired or missing user")
+	}
+
+	return claims, nil
 }
 
 func signHS256(input string, secret string) string {
