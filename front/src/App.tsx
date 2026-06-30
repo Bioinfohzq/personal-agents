@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { client } from './api/client';
 import { clearStoredSession, readStoredSession, type AuthSession } from './api/auth';
+import type { AppView } from './types/app';
 import type { Message, Thread } from './types/chat';
 
 // Components
@@ -9,9 +10,11 @@ import { Header } from './components/Header/Header';
 import { MessageList } from './components/Chat/MessageList';
 import { InputArea } from './components/Chat/InputArea';
 import { LoginPage } from './components/Auth/LoginPage';
+import { PasswordbookPage } from './components/Passwordbook/PasswordbookPage';
 
 function App() {
   const [session, setSession] = useState<AuthSession | null>(() => readStoredSession());
+  const [activeView, setActiveView] = useState<AppView>('chat');
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -103,7 +106,7 @@ function App() {
   };
 
   useEffect(() => {
-    if (!session) {
+    if (!session || activeView !== 'chat') {
       return;
     }
 
@@ -117,11 +120,12 @@ function App() {
     };
     initApp();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session]);
+  }, [session, activeView]);
 
   const handleLogout = () => {
     clearStoredSession();
     setSession(null);
+    setActiveView('chat');
     setMessages([]);
     setThreads([]);
     setThreadId(null);
@@ -213,8 +217,10 @@ function App() {
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden w-full">
-      <Sidebar 
+      <Sidebar
         isOpen={isSidebarOpen}
+        activeView={activeView}
+        onChangeView={setActiveView}
         threads={threads}
         currentThreadId={threadId}
         isLoading={isLoading}
@@ -222,7 +228,8 @@ function App() {
       />
 
       <div className="flex-1 flex flex-col min-w-0 bg-white">
-        <Header 
+        <Header
+          activeView={activeView}
           isSidebarOpen={isSidebarOpen}
           isLoading={isLoading}
           currentUser={session.user}
@@ -231,19 +238,25 @@ function App() {
           onLogout={handleLogout}
         />
 
-        <MessageList 
-          messages={messages}
-          isLoading={isLoading}
-          messagesEndRef={messagesEndRef}
-        />
+        {activeView === 'chat' ? (
+          <>
+            <MessageList
+              messages={messages}
+              isLoading={isLoading}
+              messagesEndRef={messagesEndRef}
+            />
 
-        <InputArea 
-          input={input}
-          isLoading={isLoading}
-          onInputChange={setInput}
-          onSend={handleSend}
-          onKeyDown={handleKeyDown}
-        />
+            <InputArea
+              input={input}
+              isLoading={isLoading}
+              onInputChange={setInput}
+              onSend={handleSend}
+              onKeyDown={handleKeyDown}
+            />
+          </>
+        ) : (
+          <PasswordbookPage token={session.token} />
+        )}
       </div>
     </div>
   );

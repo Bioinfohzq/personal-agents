@@ -1,4 +1,5 @@
-const BUSINESS_API_URL = import.meta.env.VITE_BUSINESS_API_URL ?? 'http://127.0.0.1:8080';
+import { BUSINESS_API_URL, readErrorMessage } from './http';
+
 const SESSION_STORAGE_KEY = 'personal_agents_session';
 
 export interface AuthUser {
@@ -15,15 +16,6 @@ export interface AuthSession {
 interface LoginResponse {
   token: string;
   user: AuthUser;
-}
-
-async function readErrorMessage(response: Response, fallback: string): Promise<string> {
-  try {
-    const data = await response.json() as { error?: string };
-    return data.error ?? fallback;
-  } catch {
-    return fallback;
-  }
 }
 
 export function readStoredSession(): AuthSession | null {
