@@ -518,17 +518,34 @@ function FormField({
   required?: boolean;
   type?: string;
 }) {
+  const [showPassword, setShowPassword] = useState(false);
+  const isPasswordField = type === 'password';
+
   return (
     <label className="block">
       <span className="text-sm font-medium text-gray-700">{label}</span>
-      <input
-        className="mt-2 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        required={required}
-        type={type}
-      />
+      <div className="relative mt-2">
+        <input
+          className={`w-full rounded-xl border border-gray-200 py-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100 ${
+            isPasswordField ? 'pl-4 pr-11' : 'px-4'
+          }`}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={placeholder}
+          required={required}
+          type={isPasswordField && !showPassword ? 'password' : isPasswordField ? 'text' : type}
+        />
+        {isPasswordField && (
+          <button
+            type="button"
+            onClick={() => setShowPassword((current) => !current)}
+            className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+            title={showPassword ? '隐藏密码' : '显示密码'}
+          >
+            {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        )}
+      </div>
     </label>
   );
 }
