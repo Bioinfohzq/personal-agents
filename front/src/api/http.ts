@@ -1,5 +1,19 @@
 export const BUSINESS_API_URL = import.meta.env.VITE_BUSINESS_API_URL ?? 'http://127.0.0.1:8080';
 
+export class BusinessApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'BusinessApiError';
+    this.status = status;
+  }
+}
+
+export function isUnauthorizedError(error: unknown): boolean {
+  return error instanceof BusinessApiError && error.status === 401;
+}
+
 export async function readErrorMessage(response: Response, fallback: string): Promise<string> {
   try {
     const data = await response.json() as { error?: string };
@@ -25,4 +39,12 @@ export async function businessFetch(
     ...init,
     headers,
   });
+}
+
+export async function assertBusinessResponse(response: Response, fallback: string): Promise<Response> {
+  if (response.ok) {
+    return response;
+  }
+
+  throw new BusinessApiError(response.status, await readErrorMessage(response, fallback));
 }

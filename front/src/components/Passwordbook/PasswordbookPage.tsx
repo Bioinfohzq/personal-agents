@@ -21,11 +21,13 @@ import {
   listPasswordbookItems,
   updatePasswordbookItem,
 } from '../../api/passwordbook';
+import { isUnauthorizedError } from '../../api/http';
 import type { PasswordbookItemInput, PasswordbookItemSummary } from '../../types/passwordbook';
 import { formatDate } from '../../utils/format';
 
 interface PasswordbookPageProps {
   token: string;
+  onSessionExpired: () => void;
 }
 
 type FormMode = 'create' | 'edit';
@@ -38,7 +40,7 @@ const emptyForm: PasswordbookItemInput = {
   notes: '',
 };
 
-export function PasswordbookPage({ token }: PasswordbookPageProps) {
+export function PasswordbookPage({ token, onSessionExpired }: PasswordbookPageProps) {
   const [items, setItems] = useState<PasswordbookItemSummary[]>([]);
   const [keyword, setKeyword] = useState('');
   const [selectedItemId, setSelectedItemId] = useState<number | null>(null);
@@ -70,6 +72,15 @@ export function PasswordbookPage({ token }: PasswordbookPageProps) {
     [items, selectedItemId],
   );
 
+  const handleApiError = useCallback((apiError: unknown, fallback: string) => {
+    if (isUnauthorizedError(apiError)) {
+      onSessionExpired();
+      return;
+    }
+
+    setError(apiError instanceof Error ? apiError.message : fallback);
+  }, [onSessionExpired]);
+
   const loadItems = useCallback(async () => {
     setIsLoadingList(true);
     setError(null);
@@ -84,11 +95,11 @@ export function PasswordbookPage({ token }: PasswordbookPageProps) {
         setShowPassword(false);
       }
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : '加载密码本失败');
+      handleApiError(loadError, '加载密码本失败');
     } finally {
       setIsLoadingList(false);
     }
-  }, [selectedItemId, token]);
+  }, [handleApiError, selectedItemId, token]);
 
   useEffect(() => {
     void loadItems();
@@ -106,7 +117,7 @@ export function PasswordbookPage({ token }: PasswordbookPageProps) {
       setSelectedPassword(detail.password);
     } catch (detailError) {
       setSelectedPassword('');
-      setError(detailError instanceof Error ? detailError.message : '读取账号详情失败');
+      handleApiError(detailError, '读取账号详情失败');
     } finally {
       setIsLoadingDetail(false);
     }
@@ -179,7 +190,7 @@ export function PasswordbookPage({ token }: PasswordbookPageProps) {
         await openItemDetail(selectedItemId);
       }
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : '保存失败');
+      handleApiError(submitError, '保存失败');
     } finally {
       setIsSubmitting(false);
     }
@@ -206,7 +217,7 @@ export function PasswordbookPage({ token }: PasswordbookPageProps) {
       closeForm();
       await loadItems();
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : '删除失败');
+      handleApiError(deleteError, '删除失败');
     } finally {
       setIsSubmitting(false);
     }

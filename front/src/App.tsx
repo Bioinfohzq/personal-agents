@@ -255,7 +255,7 @@ function App() {
             />
           </>
         ) : (
-          <PasswordbookPage token={session.token} />
+          <PasswordbookPage token={session.token} onSessionExpired={handleLogout} />
         )}
       </div>
     </div>
