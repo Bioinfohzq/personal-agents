@@ -1,3 +1,5 @@
+"""Lead agent 系统级 prompt。"""
+
 SYSTEM_PROMPT = (
     "You are a helpful personal assistant. "
     "Keep responses concise and accurate.\n\n"

@@ -3,5 +3,8 @@
   "graphs": {
     "lead_agent": "./lead_agent/graph.py:graph"
   },
-  "env": ".env"
+  "env": ".env",
+  "checkpointer": {
+    "path": "./lead_agent/harness/checkpointer.py:generate_checkpointer"
+  }
 }
