@@ -11,7 +11,6 @@ from typing import Any
 from langchain.agents import create_agent
 from langchain_core.tools import BaseTool
 
-from lead_agent.harness.checkpointer import load_checkpointer
 from lead_agent.harness.config import HarnessConfig
 from lead_agent.harness.model_config import load_model
 from lead_agent.harness.prompts import SYSTEM_PROMPT
@@ -54,14 +53,9 @@ def build_graph(config: HarnessConfig | None = None):
     config = config or HarnessConfig()
     tools = _load_tools(config)
     model = load_model()
-    checkpointer = load_checkpointer(config)
 
-    create_agent_kwargs: dict[str, Any] = {
-        "model": model,
-        "tools": tools,
-        "system_prompt": SYSTEM_PROMPT,
-    }
-    if checkpointer is not None:
-        create_agent_kwargs["checkpointer"] = checkpointer
-
-    return create_agent(**create_agent_kwargs)
+    return create_agent(
+        model=model,
+        tools=tools,
+        system_prompt=SYSTEM_PROMPT,
+    )

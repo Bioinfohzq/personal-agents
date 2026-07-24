@@ -1,10 +1,9 @@
 """Checkpoint / short-term memory factory.
 
-统一提供两种入口：
+对外入口：
 - ``generate_checkpointer``：async 上下文管理器，供 ``langgraph.json`` 的 ``checkpointer.path`` 使用。
-- ``load_checkpointer``：同步包装，供代码层直接调用。
 
-支持后端（由环境变量或 ``HarnessConfig`` 控制）：
+支持后端（由环境变量控制）：
 - memory: 进程内内存，重启丢失，适合测试
 - sqlite: 本地 SQLite 文件（默认）
 - postgres: PostgreSQL（待接入真实连接池）
@@ -13,17 +12,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 import os
 from pathlib import Path
 from typing import Any
 
-from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.memory import MemorySaver
-
-from lead_agent.harness.config import CheckpointBackend, CheckpointConfig, HarnessConfig
+from lead_agent.harness.config import CheckpointBackend, CheckpointConfig
 
 logger = logging.getLogger(__name__)
 
@@ -59,31 +54,63 @@ async def _create_checkpointer(
     backend: CheckpointBackend,
     backend_config: dict[str, Any],
 ):
-    """根据 backend 类型创建并托管 checkpointer 生命周期。"""
+    """根据 backend 类型创建并托管 checkpointer 生命周期。
+
+    这是一个 async 上下文管理器，负责：
+    1. 按 backend 选择对应的 LangGraph checkpointer 实现；
+    2. 建立连接 / 初始化文件 / 创建表结构；
+    3. 在作用域结束时释放连接。
+
+    Args:
+        backend: 存储后端类型（memory / sqlite / postgres / mongodb）。
+        backend_config: 该后端所需的连接配置，例如 sqlite 的文件路径、
+            postgres 的连接串、mongodb 的 uri。
+    """
     logger.info("Checkpointer backend: %s", backend.value)
 
+    # ------------------------------------------------------------------
+    # memory：进程内内存，重启后数据丢失；适合本地快速调试，无需任何配置。
+    # ------------------------------------------------------------------
     if backend == CheckpointBackend.MEMORY:
-        logger.info("Checkpointer: using InMemorySaver (in-process, not persistent)")
-        yield MemorySaver()
-        return
-
-    if backend == CheckpointBackend.SQLITE:
         try:
-            from langgraph.checkpoint.sqlite import SqliteSaver
+            from langgraph.checkpoint.memory import InMemorySaver
         except ImportError as exc:
             raise ImportError(
-                "使用 sqlite checkpoint 需要安装 langgraph-checkpoint-sqlite"
+                "使用 memory checkpoint 需要安装 langgraph-checkpoint"
+            ) from exc
+
+        logger.info("Checkpointer: using InMemorySaver (in-process, not persistent)")
+        yield InMemorySaver()
+        return
+
+    # ------------------------------------------------------------------
+    # sqlite：本地文件数据库（默认后端），适合本地开发和单机 demo。
+    # 只需要一个文件路径，代码会自动创建文件和表结构，无需单独启动数据库服务。
+    # 配置项：backend_config["conn_string"] 或环境变量 CHECKPOINT_SQLITE_PATH
+    # ------------------------------------------------------------------
+    if backend == CheckpointBackend.SQLITE:
+        try:
+            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+        except ImportError as exc:
+            raise ImportError(
+                "使用 sqlite checkpoint 需要安装 langgraph-checkpoint-sqlite 和 aiosqlite"
             ) from exc
 
         conn_string = backend_config.get("conn_string") or "./.langgraph_api/checkpoints.sqlite"
         Path(conn_string).parent.mkdir(parents=True, exist_ok=True)
 
-        with SqliteSaver.from_conn_string(conn_string) as saver:
-            saver.setup()
-            logger.info("Checkpointer: using SqliteSaver (%s)", conn_string)
+        async with AsyncSqliteSaver.from_conn_string(conn_string) as saver:
+            await saver.setup()
+            logger.info("Checkpointer: using AsyncSqliteSaver (%s)", conn_string)
             yield saver
         return
 
+    # ------------------------------------------------------------------
+    # postgres：生产级持久化，需要可访问的 PostgreSQL 服务。
+    # 配置项：backend_config["conn_string"] 或环境变量 CHECKPOINT_POSTGRES_URI
+    # 数据库需要提前创建好（如 CREATE DATABASE langgraph;），表结构由 SDK 自动创建。
+    # TODO: 目前只做了导入和参数校验，尚未接入真实异步连接池。
+    # ------------------------------------------------------------------
     if backend == CheckpointBackend.POSTGRES:
         try:
             from langgraph.checkpoint.postgres import PostgresSaver
@@ -96,12 +123,16 @@ async def _create_checkpointer(
         if not conn_string:
             raise ValueError("postgres checkpoint 需要配置 conn_string / CHECKPOINT_POSTGRES_URI")
 
-        # TODO: 建立异步连接池、调用 await saver.setup()
         saver = PostgresSaver.from_conn_string(conn_string)
         logger.info("Checkpointer: using PostgresSaver")
         yield saver
         return
 
+    # ------------------------------------------------------------------
+    # mongodb：另一种生产级持久化，需要可访问的 MongoDB 服务。
+    # 配置项：backend_config["uri"] 或环境变量 CHECKPOINT_MONGODB_URI
+    # TODO: 目前只做了导入和参数校验，尚未接入真实 MongoClient。
+    # ------------------------------------------------------------------
     if backend == CheckpointBackend.MONGODB:
         try:
             from langgraph.checkpoint.mongodb import MongoDBSaver
@@ -114,7 +145,6 @@ async def _create_checkpointer(
         if not uri:
             raise ValueError("mongodb checkpoint 需要配置 uri / CHECKPOINT_MONGODB_URI")
 
-        # TODO: 创建 MongoClient、选择 db
         saver = MongoDBSaver({"uri": uri})
         logger.info("Checkpointer: using MongoDBSaver")
         yield saver
@@ -136,34 +166,10 @@ async def generate_checkpointer():
         "checkpointer": {
           "path": "./lead_agent/harness/checkpointer.py:generate_checkpointer"
         }
+
+    LangGraph Server 启动时会调用本函数，按环境变量选择 backend 并创建
+    checkpointer，然后在 Server 生命周期内托管该实例。
     """
     cfg = _build_config_from_env()
     async with _create_checkpointer(cfg.backend, cfg.config) as saver:
         yield saver
-
-
-def load_checkpointer(
-    config: HarnessConfig | None = None,
-) -> BaseCheckpointSaver | None:
-    """代码层同步入口。
-
-    根据 ``HarnessConfig`` 创建 checkpointer 实例；
-    backend 为 ``none`` 时返回 None，让上层使用默认落盘行为。
-    """
-    config = config or HarnessConfig()
-    backend = config.checkpoint.backend
-    backend_config = config.checkpoint.config
-
-    if backend == CheckpointBackend.NONE:
-        return None
-
-    # 统一走 async 创建逻辑，同步场景用 asyncio.run 桥接
-    return asyncio.run(_load_checkpointer_async(backend, backend_config))
-
-
-async def _load_checkpointer_async(
-    backend: CheckpointBackend,
-    backend_config: dict[str, Any],
-) -> BaseCheckpointSaver:
-    async with _create_checkpointer(backend, backend_config) as saver:
-        return saver
