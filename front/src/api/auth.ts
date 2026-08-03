@@ -11,6 +11,11 @@ export interface AuthUser {
 export interface AuthSession {
   token: string;
   user: AuthUser;
+  // isGuest:是否为访客模式(不调后端登录接口,只体验聊天功能)
+  //   true  → 访客,只能用聊天页面,密码本不可用(无真实 token)
+  //   false → 正常登录用户,所有功能可用
+  //   undefined → 兼容旧数据,视为非访客
+  isGuest?: boolean;
 }
 
 interface LoginResponse {

@@ -1,9 +1,19 @@
 import { Bot, KeyRound, PanelLeftClose, PanelLeftOpen, PlusCircle } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 import type { AuthUser } from '../../api/auth';
-import type { AppView } from '../../types/app';
 
+/**
+ * Header 顶部导航栏组件
+ *
+ * 职责:
+ *   1. 显示当前页面的标题和图标(根据 URL 路径判断是聊天还是密码本)
+ *   2. 提供侧边栏折叠按钮、新建会话按钮、退出登录按钮
+ *
+ * 路由改造说明:
+ *   原来通过 activeView prop 判断当前视图,现在用 useLocation 读取 URL 路径判断。
+ *   这样 Header 不需要父组件传 activeView,自己就能感知当前页面。
+ */
 interface HeaderProps {
-  activeView: AppView;
   isSidebarOpen: boolean;
   isLoading: boolean;
   currentUser: AuthUser;
@@ -13,7 +23,6 @@ interface HeaderProps {
 }
 
 export function Header({
-  activeView,
   isSidebarOpen,
   isLoading,
   currentUser,
@@ -21,7 +30,10 @@ export function Header({
   onCreateThread,
   onLogout,
 }: HeaderProps) {
-  const isChatView = activeView === 'chat';
+  // 从 URL 路径判断当前页面:以 /chat 开头就是聊天页面
+  const location = useLocation();
+  const isChatView = location.pathname.startsWith('/chat');
+
   const title = isChatView ? 'AI 助理' : '密码本';
   const subtitle = isChatView ? 'LangGraph 连接正常' : '个人账号资料管理';
   const Icon = isChatView ? Bot : KeyRound;
@@ -53,6 +65,7 @@ export function Header({
 
       <div className="flex items-center gap-3">
         <span className="hidden md:inline text-sm text-gray-500">{currentUser.username}</span>
+        {/* "新建会话"按钮仅在聊天页面显示 */}
         {isChatView && (
           <button
             type="button"

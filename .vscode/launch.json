@@ -74,6 +74,23 @@
         "Frontend: dev server"
       ],
       "stopAll": true
+    },
+    {
+      "name": "Frontend + Agent (macOS/Linux)",
+      "configurations": [
+        "LangGraph: dev server (macOS/Linux)",
+        "Frontend: dev server"
+      ],
+      "stopAll": true
+    },
+    {
+      "name": "Frontend + Agent (Windows)",
+      "configurations": [
+        "LangGraph: dev server (Windows)",
+        "Frontend: dev server"
+      ],
+      "stopAll": true
     }
   ]
 }
+

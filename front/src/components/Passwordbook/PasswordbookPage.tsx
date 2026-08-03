@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
+import { Navigate } from 'react-router-dom';
 import {
   Copy,
   ExternalLink,
@@ -24,11 +25,11 @@ import {
 import { isUnauthorizedError } from '../../api/http';
 import type { PasswordbookItemInput, PasswordbookItemSummary } from '../../types/passwordbook';
 import { formatDate } from '../../utils/format';
+import { useAuth } from '../../auth/AuthContext';
 
-interface PasswordbookPageProps {
-  token: string;
-  onSessionExpired: () => void;
-}
+// 路由改造说明:
+//   原来通过 props 接收 token 和 onSessionExpired,
+//   现在从 AuthContext 获取(ProtectedRoute 已确保 session 存在)
 
 type FormMode = 'create' | 'edit';
 
@@ -40,7 +41,19 @@ const emptyForm: PasswordbookItemInput = {
   notes: '',
 };
 
-export function PasswordbookPage({ token, onSessionExpired }: PasswordbookPageProps) {
+export function PasswordbookPage() {
+  // 从 AuthContext 获取认证信息
+  // ProtectedRoute 已确保 session 存在,用 ! 断言非空
+  const { session, logout } = useAuth();
+
+  // 访客模式拦截:访客没有真实 token,密码本不可用,直接重定向回聊天页
+  // 防止访客通过手动输入 URL(/passwordbook)访问密码本
+  if (session?.isGuest === true) {
+    return <Navigate to="/chat" replace />;
+  }
+
+  const token = session!.token;
+  const onSessionExpired = logout;
   const [items, setItems] = useState<PasswordbookItemSummary[]>([]);
   const [keyword, setKeyword] = useState('');
   const [selectedItemId, setSelectedItemId] = useState<number | null>(null);
@@ -86,6 +99,10 @@ export function PasswordbookPage({ token, onSessionExpired }: PasswordbookPagePr
     setError(null);
 
     try {
+      // 【后端接口调用 1/5】拉取密码本列表
+      //   GET /api/v1/passwordbook/items
+      //   返回:PasswordbookItemSummary[](不含密码明文,只有平台/账号/备注等摘要)
+      //   触发时机:页面首次加载(useEffect)、创建/更新/删除后刷新、点击"刷新"按钮
       const nextItems = await listPasswordbookItems(token);
       setItems(nextItems);
 
@@ -113,6 +130,11 @@ export function PasswordbookPage({ token, onSessionExpired }: PasswordbookPagePr
     setError(null);
 
     try {
+      // 【后端接口调用 2/5】获取单条账号详情(含密码明文)
+      //   GET /api/v1/passwordbook/items/{itemId}
+      //   返回:PasswordbookItemDetail(包含 password 字段)
+      //   注意:列表接口不返回密码,只有点击某条记录时才单独请求密码
+      //   安全考量:密码按需加载,减少明文在内存中的暴露时间
       const detail = await getPasswordbookItem(token, itemId);
       setSelectedPassword(detail.password);
     } catch (detailError) {
@@ -176,18 +198,26 @@ export function PasswordbookPage({ token, onSessionExpired }: PasswordbookPagePr
 
     try {
       if (formMode === 'create') {
+        // 【后端接口调用 3/5】创建新账号记录
+        //   POST /api/v1/passwordbook/items
+        //   请求体:PasswordbookItemInput(platform/login_account/password/login_url/notes)
+        //   返回:PasswordbookItemDetail(含后端生成的 id)
         const created = await createPasswordbookItem(token, payload);
-        await loadItems();
-        closeForm();
-        await openItemDetail(created.id);
+        await loadItems();              // 刷新列表
+        closeForm();                    // 关闭弹窗
+        await openItemDetail(created.id); // 自动选中新创建的记录
         return;
       }
 
       if (formMode === 'edit' && selectedItemId) {
+        // 【后端接口调用 4/5】更新已有账号记录
+        //   PUT /api/v1/passwordbook/items/{selectedItemId}
+        //   请求体:PasswordbookItemInput(密码留空表示不修改)
+        //   返回:PasswordbookItemDetail
         await updatePasswordbookItem(token, selectedItemId, payload);
-        await loadItems();
-        closeForm();
-        await openItemDetail(selectedItemId);
+        await loadItems();                // 刷新列表
+        closeForm();                      // 关闭弹窗
+        await openItemDetail(selectedItemId); // 重新加载详情
       }
     } catch (submitError) {
       handleApiError(submitError, '保存失败');
@@ -210,6 +240,10 @@ export function PasswordbookPage({ token, onSessionExpired }: PasswordbookPagePr
     setError(null);
 
     try {
+      // 【后端接口调用 5/5】删除单条账号记录
+      //   DELETE /api/v1/passwordbook/items/{selectedItemId}
+      //   无返回体(204 No Content)
+      //   删除成功后清空选中状态并刷新列表
       await deletePasswordbookItem(token, selectedItemId);
       setSelectedItemId(null);
       setSelectedPassword('');
