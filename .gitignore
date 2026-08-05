@@ -17,6 +17,8 @@ venv/
 # Go
 api/bin/
 api/configs/config.yaml
+api/tmp/
+api/air_errors.log
 
 # Environment files
 .env

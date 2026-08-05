@@ -1,4 +1,4 @@
-import { Bot, KeyRound, MessageSquare, Clock } from 'lucide-react';
+import { Bot, KeyRound, MessageSquare, Clock, CalendarDays, HardDrive } from 'lucide-react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import type { Thread } from '../../types/chat';
 import { formatDate } from '../../utils/format';
@@ -30,6 +30,8 @@ interface SidebarProps {
 const NAV_ITEMS: Array<{ to: string; label: string; icon: typeof Bot }> = [
   { to: '/chat', label: 'AI 助理', icon: Bot },
   { to: '/passwordbook', label: '密码本', icon: KeyRound },
+  { to: '/schedule', label: '日程', icon: CalendarDays },
+  { to: '/filesystem', label: '文件系统', icon: HardDrive },
 ];
 
 export function Sidebar({
@@ -42,12 +44,14 @@ export function Sidebar({
   const isChatView = location.pathname.startsWith('/chat');
 
   // 从 AuthContext 获取 session,判断是否为访客模式
-  // 访客模式下隐藏密码本入口
+  // 访客模式下隐藏密码本和日程入口(需要后端 JWT 鉴权)
   const { session } = useAuth();
   const isGuest = session?.isGuest === true;
 
-  // 过滤导航项:访客只显示聊天,不显示密码本
-  const visibleNavItems = isGuest ? NAV_ITEMS.filter((item) => item.to !== '/passwordbook') : NAV_ITEMS;
+  // 过滤导航项:访客只显示聊天,不显示密码本/日程/文件系统(需要后端 JWT 鉴权)
+  const visibleNavItems = isGuest
+    ? NAV_ITEMS.filter((item) => item.to !== '/passwordbook' && item.to !== '/schedule' && item.to !== '/filesystem')
+    : NAV_ITEMS;
 
   return (
     <aside

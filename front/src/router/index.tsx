@@ -4,6 +4,8 @@ import { MainLayout } from '../layouts/MainLayout';
 import { ChatPage } from '../pages/ChatPage';
 import { LoginPage } from '../components/Auth/LoginPage';
 import { PasswordbookPage } from '../components/Passwordbook/PasswordbookPage';
+import { SchedulePage } from '../components/Schedule/SchedulePage';
+import { FileSystemPage } from '../components/FileSystem/FileSystemPage';
 
 /**
  * 路由配置
@@ -49,6 +51,10 @@ export const router = createBrowserRouter([
           { path: 'chat/:threadId', element: <ChatPage /> },
           // 密码本页
           { path: 'passwordbook', element: <PasswordbookPage /> },
+          // 日程页(月视图日历,管理日程安排)
+          { path: 'schedule', element: <SchedulePage /> },
+          // 文件系统页(目录扫描/存储分析/权限查看,仅 macOS/Linux)
+          { path: 'filesystem', element: <FileSystemPage /> },
           // 未知路由重定向到聊天页
           { path: '*', element: <Navigate to="/chat" replace /> },
         ],

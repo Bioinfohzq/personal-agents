@@ -6,8 +6,10 @@ import (
 	"personal-agents/api/internal/auth"
 	"personal-agents/api/internal/config"
 	"personal-agents/api/internal/database"
+	"personal-agents/api/internal/filesystem"
 	"personal-agents/api/internal/middleware"
 	"personal-agents/api/internal/passwordbook"
+	"personal-agents/api/internal/schedule"
 	"personal-agents/api/internal/user"
 )
 
@@ -28,6 +30,7 @@ func (server *Server) Handler() http.Handler {
 
 	authHandler := auth.NewHandler(server.store, server.cfg.Auth)
 	passwordbookHandler := passwordbook.NewHandler(server.store, server.cfg.Auth.JWTSecret)
+	scheduleHandler := schedule.NewHandler(server.store)
 	userHandler := user.NewHandler()
 
 	mux.HandleFunc("/healthz", server.handleHealth)
@@ -37,6 +40,15 @@ func (server *Server) Handler() http.Handler {
 	mux.Handle("/api/v1/users/me", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(userHandler.Me)))
 	mux.Handle("/api/v1/passwordbook/items", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(passwordbookHandler.Items)))
 	mux.Handle("/api/v1/passwordbook/items/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(passwordbookHandler.Item)))
+	// 日程管理:需要 JWT 鉴权,支持按 ?start=&end= 过滤时间范围
+	mux.Handle("/api/v1/schedules", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(scheduleHandler.Schedules)))
+	mux.Handle("/api/v1/schedules/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(scheduleHandler.Schedule)))
+
+	// 文件系统管理:目录扫描/存储分析/权限查看,仅 macOS/Linux 可用
+	filesystemHandler := filesystem.NewHandler()
+	mux.Handle("/api/v1/filesystem/scan", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(filesystemHandler.Scan)))
+	mux.Handle("/api/v1/filesystem/storage", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(filesystemHandler.Storage)))
+	mux.Handle("/api/v1/filesystem/permissions", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(filesystemHandler.Permissions)))
 
 	return middleware.Recover(middleware.CORS(middleware.RequestLog(mux)))
 }

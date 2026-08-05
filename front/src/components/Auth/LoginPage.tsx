@@ -27,10 +27,8 @@ export function LoginPage() {
   }
 
   const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [username, setUsername] = useState('');     // 注册模式的用户名
-  const [email, setEmail] = useState('');           // 注册模式的邮箱
-  const [account, setAccount] = useState('');       // 登录模式的账号(用户名或邮箱)
-  const [password, setPassword] = useState('');     // 密码(两种模式共用)
+  const [account, setAccount] = useState('');       // 账号：登录和注册共用，支持用户名/手机号/邮箱
+  const [password, setPassword] = useState('');     // 密码（登录和注册共用）
   const [error, setError] = useState<string | null>(null);  // 错误提示,null 表示无错误
   const [isSubmitting, setIsSubmitting] = useState(false);   // 提交中状态,用于禁用按钮和显示 loading
 
@@ -42,17 +40,13 @@ export function LoginPage() {
     // 阻止表单默认提交行为(默认会刷新页面),改用 JS 控制提交
     event.preventDefault();
 
-    // 前端参数校验
-    if (mode === 'login' && (!account.trim() || !password)) {
+    // 前端参数校验：账号和密码都必填
+    if (!account.trim() || !password) {
       setError('请输入账号和密码');
       return;
     }
 
-    if (mode === 'register' && (!username.trim() || !email.trim() || !password)) {
-      setError('请输入用户名、邮箱和密码');
-      return;
-    }
-
+    // 注册模式额外校验密码长度
     if (mode === 'register' && password.length < 8) {
       setError('密码至少需要 8 位');
       return;
@@ -63,9 +57,10 @@ export function LoginPage() {
 
     try {
       // 根据当前模式调用不同的认证接口
+      // login 和 register 都只需要 account + password
       const session: AuthSession = mode === 'login'
         ? await loginApi(account.trim(), password)
-        : await register(username.trim(), email.trim(), password);
+        : await register(account.trim(), password);
 
       // 登录成功:
       //   1. 调用 AuthContext 的 login(内部会持久化到 localStorage + 更新全局状态)
@@ -95,6 +90,7 @@ export function LoginPage() {
       user: {
         id: 0,
         username: '访客',
+        phone: '',
         email: '',
       },
       isGuest: true,
@@ -113,43 +109,19 @@ export function LoginPage() {
         </div>
 
         <form className="space-y-5" onSubmit={handleSubmit}>
-          {mode === 'login' ? (
-            <label className="block">
-              <span className="text-sm font-medium text-slate-700">账号 / 邮箱</span>
-              <input
-                className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-                value={account}
-                onChange={(event) => setAccount(event.target.value)}
-                autoComplete="username"
-                placeholder="请输入账号或邮箱"
-              />
-            </label>
-          ) : (
-            <>
-              <label className="block">
-                <span className="text-sm font-medium text-slate-700">用户名</span>
-                <input
-                  className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-                  value={username}
-                  onChange={(event) => setUsername(event.target.value)}
-                  autoComplete="username"
-                  placeholder="请输入用户名"
-                />
-              </label>
-
-              <label className="block">
-                <span className="text-sm font-medium text-slate-700">邮箱</span>
-                <input
-                  className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
-                  type="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  autoComplete="email"
-                  placeholder="请输入邮箱"
-                />
-              </label>
-            </>
-          )}
+          {/* 登录和注册模式共用同一个账号输入框 */}
+          <label className="block">
+            <span className="text-sm font-medium text-slate-700">
+              {mode === 'login' ? '账号' : '账号（用户名 / 手机号 / 邮箱）'}
+            </span>
+            <input
+              className="mt-2 w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+              value={account}
+              onChange={(event) => setAccount(event.target.value)}
+              autoComplete="username"
+              placeholder={mode === 'login' ? '请输入账号' : '支持用户名、手机号或邮箱'}
+            />
+          </label>
 
           <label className="block">
             <span className="text-sm font-medium text-slate-700">密码</span>
@@ -158,8 +130,8 @@ export function LoginPage() {
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              autoComplete="current-password"
-              placeholder="请输入密码"
+              autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+              placeholder={mode === 'login' ? '请输入密码' : '至少 8 位'}
             />
           </label>
 

@@ -64,7 +64,10 @@ export function Header({
       </div>
 
       <div className="flex items-center gap-3">
-        <span className="hidden md:inline text-sm text-gray-500">{currentUser.username}</span>
+        {/* 显示用户标识：优先 username，其次 phone，最后 email */}
+        <span className="hidden md:inline text-sm text-gray-500">
+          {currentUser.username || currentUser.phone || currentUser.email}
+        </span>
         {/* "新建会话"按钮仅在聊天页面显示 */}
         {isChatView && (
           <button

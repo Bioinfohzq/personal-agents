@@ -10,9 +10,11 @@ import (
 	"time"
 )
 
+// TokenClaims JWT 载荷，包含用户身份信息
 type TokenClaims struct {
 	UserID    int64  `json:"user_id"`
 	Username  string `json:"username"`
+	Phone     string `json:"phone"`     // 手机号（用手机号注册时有值，否则为空）
 	Email     string `json:"email"`
 	ExpiresAt int64  `json:"exp"`
 }

@@ -2,10 +2,13 @@ import { BUSINESS_API_URL, readErrorMessage } from './http';
 
 const SESSION_STORAGE_KEY = 'personal_agents_session';
 
+// AuthUser 用户信息
+// username / phone / email 三者可能只有其中一个有值（取决于注册方式）
 export interface AuthUser {
   id: number;
-  username: string;
-  email: string;
+  username: string;  // 用户名，可能为空字符串（用手机号/邮箱注册时）
+  phone: string;     // 手机号，可能为空字符串（用用户名/邮箱注册时）
+  email: string;     // 邮箱，可能为空字符串（用用户名/手机号注册时）
 }
 
 export interface AuthSession {
@@ -65,17 +68,19 @@ export async function login(account: string, password: string): Promise<AuthSess
   };
 }
 
-export async function register(username: string, email: string, password: string): Promise<AuthSession> {
+// register 注册接口
+// account: 账号（用户名 / 手机号 / 邮箱三选一），后端会自动识别类型
+export async function register(account: string, password: string): Promise<AuthSession> {
   const response = await fetch(`${BUSINESS_API_URL}/api/v1/auth/register`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ username, email, password }),
+    body: JSON.stringify({ account, password }),
   });
 
   if (!response.ok) {
-    throw new Error(await readErrorMessage(response, response.status === 409 ? '用户名或邮箱已存在' : '注册失败'));
+    throw new Error(await readErrorMessage(response, response.status === 409 ? '该账号已存在' : '注册失败'));
   }
 
   const data = await response.json() as LoginResponse;

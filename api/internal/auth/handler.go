@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,6 +16,12 @@ import (
 	"personal-agents/api/internal/config"
 	"personal-agents/api/internal/database"
 )
+
+// 手机号正则：1 开头，第二位 3-9，共 11 位数字
+var phoneRegexp = regexp.MustCompile(`^1[3-9]\d{9}$`)
+
+// 邮箱正则：简单校验 xxx@xxx.xxx 格式
+var emailRegexp = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
 
 type Handler struct {
 	store *database.Store
@@ -26,9 +33,9 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
+// RegisterRequest 注册请求：账号（用户名/手机号/邮箱三选一）+ 密码
 type RegisterRequest struct {
-	Username string `json:"username"`
-	Email    string `json:"email"`
+	Account  string `json:"account"` // 账号：可以是用户名、手机号或邮箱
 	Password string `json:"password"`
 }
 
@@ -41,12 +48,14 @@ type LoginResponse struct {
 type UserProfile struct {
 	ID       int64  `json:"id"`
 	Username string `json:"username"`
+	Phone    string `json:"phone"`
 	Email    string `json:"email"`
 }
 
 type userRecord struct {
 	ID           int64
 	Username     string
+	Phone        string
 	Email        string
 	PasswordHash string
 }
@@ -96,10 +105,12 @@ func (handler *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// SignToken 签发 JWT，包含用户 ID、用户名、手机号、邮箱
 	ttl := handler.auth.TokenTTL()
 	token, err := SignToken(TokenClaims{
 		UserID:    user.ID,
 		Username:  user.Username,
+		Phone:     user.Phone,
 		Email:     user.Email,
 		ExpiresAt: time.Now().Add(ttl).Unix(),
 	}, handler.auth.JWTSecret)
@@ -113,6 +124,7 @@ func (handler *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		User: UserProfile{
 			ID:       user.ID,
 			Username: user.Username,
+			Phone:    user.Phone,
 			Email:    user.Email,
 		},
 		TTL: int64(ttl.Seconds()),
@@ -131,17 +143,29 @@ func (handler *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	request.Username = strings.TrimSpace(request.Username)
-	request.Email = strings.TrimSpace(request.Email)
-
-	if request.Username == "" || request.Email == "" || request.Password == "" {
-		writeError(w, http.StatusBadRequest, "username, email and password are required")
+	// 去空格后校验：账号和密码都必填
+	account := strings.TrimSpace(request.Account)
+	if account == "" || request.Password == "" {
+		writeError(w, http.StatusBadRequest, "account and password are required")
 		return
 	}
 
 	if len(request.Password) < 8 {
 		writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
 		return
+	}
+
+	// 根据账号格式自动判断类型：手机号 / 邮箱 / 用户名
+	// 三种类型分别写入 phone / email / username 列，其余列为 NULL
+	var username, phone, email string
+	switch {
+	case phoneRegexp.MatchString(account):
+		phone = account
+	case emailRegexp.MatchString(account):
+		email = account
+	default:
+		// 既不是手机号也不是邮箱，按用户名处理
+		username = account
 	}
 
 	if handler.auth.JWTSecret == "" || handler.auth.JWTSecret == "<replace_with_a_long_random_secret>" {
@@ -155,16 +179,18 @@ func (handler *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 插入用户记录：只填充对应类型的列，其余为 NULL
 	result, err := handler.store.DB().ExecContext(
 		r.Context(),
-		`INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)`,
-		request.Username,
-		request.Email,
+		`INSERT INTO users (username, phone, email, password_hash) VALUES (?, ?, ?, ?)`,
+		nilOrString(username),
+		nilOrString(phone),
+		nilOrString(email),
 		string(passwordHash),
 	)
 	if err != nil {
 		if isDuplicateEntry(err) {
-			writeError(w, http.StatusConflict, "username or email already exists")
+			writeError(w, http.StatusConflict, "account already exists")
 			return
 		}
 
@@ -178,10 +204,12 @@ func (handler *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 构造 userRecord 用于签发 token
 	user := userRecord{
 		ID:       userID,
-		Username: request.Username,
-		Email:    request.Email,
+		Username: username,
+		Phone:    phone,
+		Email:    email,
 	}
 
 	response, err := handler.buildLoginResponse(user)
@@ -193,24 +221,29 @@ func (handler *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, response)
 }
 
+// findUserByAccount 按账号查询用户，支持用户名 / 手机号 / 邮箱三种类型
 func (handler *Handler) findUserByAccount(ctx context.Context, account string) (userRecord, error) {
 	var user userRecord
+	// 三个字段任一匹配即可，兼容用户用任意类型注册的账号登录
 	row := handler.store.DB().QueryRowContext(
 		ctx,
-		`SELECT id, username, email, password_hash FROM users WHERE username = ? OR email = ? LIMIT 1`,
+		`SELECT id, username, phone, email, password_hash FROM users WHERE username = ? OR phone = ? OR email = ? LIMIT 1`,
+		account,
 		account,
 		account,
 	)
 
-	err := row.Scan(&user.ID, &user.Username, &user.Email, &user.PasswordHash)
+	err := row.Scan(&user.ID, &user.Username, &user.Phone, &user.Email, &user.PasswordHash)
 	return user, err
 }
 
+// buildLoginResponse 构造登录成功响应（签发 JWT + 用户信息）
 func (handler *Handler) buildLoginResponse(user userRecord) (LoginResponse, error) {
 	ttl := handler.auth.TokenTTL()
 	token, err := SignToken(TokenClaims{
 		UserID:    user.ID,
 		Username:  user.Username,
+		Phone:     user.Phone,
 		Email:     user.Email,
 		ExpiresAt: time.Now().Add(ttl).Unix(),
 	}, handler.auth.JWTSecret)
@@ -223,10 +256,20 @@ func (handler *Handler) buildLoginResponse(user userRecord) (LoginResponse, erro
 		User: UserProfile{
 			ID:       user.ID,
 			Username: user.Username,
+			Phone:    user.Phone,
 			Email:    user.Email,
 		},
 		TTL: int64(ttl.Seconds()),
 	}, nil
+}
+
+// nilOrString 将空字符串转为 nil（用于 SQL 插入 NULL），
+// 非空字符串原样返回。Go 的 database/sql 会把 nil 作为 NULL 传递给驱动。
+func nilOrString(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func isDuplicateEntry(err error) bool {
