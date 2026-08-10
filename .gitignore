@@ -15,10 +15,10 @@ venv/
 .langgraph_api/
 
 # Go
-api/bin/
-api/configs/config.yaml
-api/tmp/
-api/air_errors.log
+backend/bin/
+backend/configs/config.yaml
+backend/tmp/
+backend/air_errors.log
 
 # Environment files
 .env

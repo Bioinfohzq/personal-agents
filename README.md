@@ -1,15 +1,15 @@
-﻿# Personal Agents (AI 助理全栈项目)
+# Personal Agents (AI 助理全栈项目)
 
 这是一个全栈式的个人智能体（AI Assistant）项目。
-- **智能体后端**：基于 LangChain `create_agent` 和 LangGraph 构建的 Lead Agent 服务，使用 `uv` 管理 Python 依赖。
-- **业务后端**：基于 Go 构建的 API 服务，用于承载用户、登录、权限、业务配置和数据库访问。
-- **前端**：基于 React + Vite + Tailwind CSS v4 构建的现代化 Web 交互界面，使用官方 `@langchain/langgraph-sdk` 直连后端，支持打字机流式输出。
+- **智能体核心**：基于 LangChain `create_agent` 和 LangGraph 构建的 Agent 服务，使用 `uv` 管理 Python 依赖。
+- **业务后端**：基于 Go 构建的后端服务，用于承载用户、登录、权限、业务配置和数据库访问。
+- **Web 前端**：基于 React + Vite + Tailwind CSS v4 构建的现代化 Web 交互界面，使用官方 `@langchain/langgraph-sdk` 直连后端，支持打字机流式输出。
 
 ## 项目结构
 
-- `/lead_agent`: 核心智能体图结构逻辑（LangGraph）。
-- `/api`: Go 业务后端，负责用户、登录、权限、配置和数据库访问。
-- `/front`: React 前端交互项目界面。
+- `/agent`: 核心智能体图结构逻辑（LangGraph）。
+- `/backend`: Go 业务后端，负责用户、登录、权限、配置和数据库访问。
+- `/web`: React 前端交互项目界面。
 - `/desktop`: 基于 React + TypeScript + Tauri 2 的桌面客户端，默认连接本机 LangGraph API。
 - `langgraph.json`: LangGraph 服务的配置文件。
 - `Makefile` & `start_services.sh`: macOS/Linux 下的项目脚手架与一键启停管理脚本。
@@ -34,10 +34,10 @@ make setup
 Windows PowerShell 可分别执行：
 ```powershell
 uv sync
-cd api
+cd backend
 go mod download
 cd ..
-cd front
+cd web
 pnpm install
 cd ..
 ```
@@ -68,7 +68,7 @@ make dev
 
 然后新开一个 PowerShell 终端启动前端：
 ```powershell
-cd front
+cd web
 pnpm run dev
 ```
 
@@ -82,28 +82,28 @@ pnpm run dev
 
 macOS/Linux 可通过项目根目录的 `Makefile` 使用统一操作入口：
 
-- `make build`: 构建前端生产环境静态资源 (打包产物输出至 `front/dist` 目录)。
-- `make lint`: 运行前端代码检查。
+- `make build`: 构建前端生产环境静态资源 (打包产物输出至 `web/dist` 目录)。
+- `make lint`: 运行代码检查。
 - `make clean`: 一键清理前后端的缓存目录和构建产物（包含 `node_modules`, `.venv`, `__pycache__`, `dist` 等）。
 
 Windows PowerShell 下可直接执行对应命令：
 ```powershell
-cd front
+cd web
 pnpm run build
 pnpm run lint
 ```
 
-## 业务 API
+## 业务后端
 
-业务 API 位于 `api/`，使用 Go 开发，负责用户、登录、权限、业务配置和数据库访问。服务启动时会连接 MySQL，并自动应用 `api/migrations/*.up.sql` 中尚未执行过的迁移脚本；如果配置缺失或数据库不可用，服务会启动失败。
+业务后端位于 `backend/`，使用 Go 开发，负责用户、登录、权限、业务配置和数据库访问。服务启动时会连接 MySQL，并自动应用 `backend/migrations/*.up.sql` 中尚未执行过的迁移脚本；如果配置缺失或数据库不可用，服务会启动失败。
 
 首次本地开发可先复制配置模板：
 ```powershell
-cd api
+cd backend
 Copy-Item configs/config.example.yaml configs/config.yaml
 ```
 
-然后编辑 `api/configs/config.yaml`，填入本地 MySQL 地址：
+然后编辑 `backend/configs/config.yaml`，填入本地 MySQL 地址：
 ```yaml
 database:
   driver: mysql
@@ -118,7 +118,7 @@ database:
 
 本地启动：
 ```powershell
-cd api
+cd backend
 go run ./cmd/server
 ```
 
@@ -136,7 +136,7 @@ Invoke-RestMethod http://127.0.0.1:8080/healthz
 
 ## 桌面客户端
 
-桌面端位于 `desktop/`，是一个独立的 React + Vite + Tauri 2 应用。第一版默认连接 `http://localhost:2024` 的 LangGraph 服务，并使用 `lead_agent` 作为 assistant id。依赖管理统一使用 `pnpm`，不要在 `desktop/` 下混用 `npm install` 或 `yarn`。
+桌面端位于 `desktop/`，是一个独立的 React + Vite + Tauri 2 应用。第一版默认连接 `http://localhost:2024` 的 LangGraph 服务，并使用 `lead_agent` 作为 assistant id（逻辑名称，与目录名无关）。依赖管理统一使用 `pnpm`，不要在 `desktop/` 下混用 `npm install` 或 `yarn`。
 
 ### 桌面端环境要求
 

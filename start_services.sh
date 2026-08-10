@@ -10,7 +10,7 @@ sleep 3
 
 # 启动 Vite 前端服务
 echo "启动前端 Vite 服务..."
-cd front
+cd web
 pnpm run dev &
 FRONTEND_PID=$!
 
