@@ -46,14 +46,14 @@
       "type": "node-terminal",
       "request": "launch",
       "command": "pnpm run dev",
-      "cwd": "${workspaceFolder}/front"
+      "cwd": "${workspaceFolder}/web"
     },
     {
       "name": "Business API: dev server (Windows/macOS/Linux)",
       "type": "node-terminal",
       "request": "launch",
       "command": "go run ./cmd/server",
-      "cwd": "${workspaceFolder}/api"
+      "cwd": "${workspaceFolder}/backend"
     }
   ],
   "compounds": [
