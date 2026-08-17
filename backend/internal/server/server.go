@@ -1,9 +1,10 @@
-﻿package server
+package server
 
 import (
 	"net/http"
 
 	"personal-agents/backend/internal/auth"
+	"personal-agents/backend/internal/commandbook"
 	"personal-agents/backend/internal/config"
 	"personal-agents/backend/internal/database"
 	"personal-agents/backend/internal/filesystem"
@@ -31,6 +32,7 @@ func (server *Server) Handler() http.Handler {
 	authHandler := auth.NewHandler(server.store, server.cfg.Auth)
 	passwordbookHandler := passwordbook.NewHandler(server.store, server.cfg.Auth.JWTSecret)
 	scheduleHandler := schedule.NewHandler(server.store)
+	commandbookHandler := commandbook.NewHandler(server.store)
 	userHandler := user.NewHandler()
 
 	mux.HandleFunc("/healthz", server.handleHealth)
@@ -43,6 +45,9 @@ func (server *Server) Handler() http.Handler {
 	// 日程管理:需要 JWT 鉴权,支持按 ?start=&end= 过滤时间范围
 	mux.Handle("/api/v1/schedules", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(scheduleHandler.Schedules)))
 	mux.Handle("/api/v1/schedules/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(scheduleHandler.Schedule)))
+	// 命令手册:记录各类命令及个人理解,支持 ?category=&q= 过滤搜索
+	mux.Handle("/api/v1/commands", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(commandbookHandler.Commands)))
+	mux.Handle("/api/v1/commands/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(commandbookHandler.Command)))
 
 	// 文件系统管理:目录扫描/存储分析/权限查看,仅 macOS/Linux 可用
 	filesystemHandler := filesystem.NewHandler()

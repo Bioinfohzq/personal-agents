@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Navigate } from 'react-router-dom';
 import {
@@ -67,10 +67,11 @@ export function FileSystemPage() {
   // --- Tab 切换:目录扫描 / 存储分析 ---
   const [activeTab, setActiveTab] = useState<'scan' | 'storage'>('storage');
 
-  // 进入页面时自动加载 home 目录的存储分析
-  useEffect(() => {
-    loadStorageAnalysis('');
-  }, []);
+  // 文件系统模块已暂停服务:进入页面不再自动扫描,避免递归遍历整个 home 目录
+  // 如需恢复自动加载,把下面的 useEffect 注释打开即可:
+  // useEffect(() => {
+  //   loadStorageAnalysis('');
+  // }, []);
 
   // 处理 401:token 过期则登出
   const handleApiError = useCallback(

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -96,6 +97,7 @@ func (handler *Handler) Login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		slog.Error("login findUserByAccount failed", "account", request.Account, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to query user")
 		return
 	}
@@ -225,9 +227,11 @@ func (handler *Handler) Register(w http.ResponseWriter, r *http.Request) {
 func (handler *Handler) findUserByAccount(ctx context.Context, account string) (userRecord, error) {
 	var user userRecord
 	// 三个字段任一匹配即可，兼容用户用任意类型注册的账号登录
+	// COALESCE 把 NULL 转成空字符串，避免 database/sql 把 NULL 扫描到 string 时报错
+	// （username / phone / email 三列均允许 NULL，取决于用户注册时用的账号类型）
 	row := handler.store.DB().QueryRowContext(
 		ctx,
-		`SELECT id, username, phone, email, password_hash FROM users WHERE username = ? OR phone = ? OR email = ? LIMIT 1`,
+		`SELECT id, COALESCE(username, ''), COALESCE(phone, ''), COALESCE(email, ''), password_hash FROM users WHERE username = ? OR phone = ? OR email = ? LIMIT 1`,
 		account,
 		account,
 		account,
