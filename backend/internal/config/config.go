@@ -16,6 +16,7 @@ type Config struct {
 	Port     string
 	Database DatabaseConfig
 	Auth     AuthConfig
+	LLM      LLMConfig
 }
 
 type DatabaseConfig struct {
@@ -33,6 +34,12 @@ type DatabaseConfig struct {
 type AuthConfig struct {
 	JWTSecret       string
 	TokenTTLMinutes string
+}
+
+type LLMConfig struct {
+	DefaultModel   string
+	MoonshotAPIKey string
+	DeepseekAPIKey string
 }
 
 func (cfg AuthConfig) TokenTTL() time.Duration {
@@ -67,6 +74,11 @@ func Load() Config {
 		Auth: AuthConfig{
 			JWTSecret:       getEnv("AUTH_JWT_SECRET", fileConfig.Auth.JWTSecret),
 			TokenTTLMinutes: getEnv("AUTH_TOKEN_TTL_MINUTES", valueOrDefault(fileConfig.Auth.TokenTTLMinutes, "10080")),
+		},
+		LLM: LLMConfig{
+			DefaultModel:   getEnv("DEFAULT_MODEL", fileConfig.LLM.DefaultModel),
+			MoonshotAPIKey: getEnv("MOONSHOT_API_KEY", fileConfig.LLM.MoonshotAPIKey),
+			DeepseekAPIKey: getEnv("DEEPSEEK_API_KEY", fileConfig.LLM.DeepseekAPIKey),
 		},
 	}
 }
@@ -190,6 +202,15 @@ func assignYAMLValue(cfg *Config, section string, key string, value string) {
 			cfg.Auth.JWTSecret = value
 		case "token_ttl_minutes":
 			cfg.Auth.TokenTTLMinutes = value
+		}
+	case "llm":
+		switch key {
+		case "default_model":
+			cfg.LLM.DefaultModel = value
+		case "moonshot_api_key":
+			cfg.LLM.MoonshotAPIKey = value
+		case "deepseek_api_key":
+			cfg.LLM.DeepseekAPIKey = value
 		}
 	}
 }

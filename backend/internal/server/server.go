@@ -32,7 +32,7 @@ func (server *Server) Handler() http.Handler {
 	authHandler := auth.NewHandler(server.store, server.cfg.Auth)
 	passwordbookHandler := passwordbook.NewHandler(server.store, server.cfg.Auth.JWTSecret)
 	scheduleHandler := schedule.NewHandler(server.store)
-	commandbookHandler := commandbook.NewHandler(server.store)
+	commandbookHandler := commandbook.NewHandler(server.store, server.cfg.LLM)
 	userHandler := user.NewHandler()
 
 	mux.HandleFunc("/healthz", server.handleHealth)
@@ -48,6 +48,8 @@ func (server *Server) Handler() http.Handler {
 	// 命令手册:记录各类命令及个人理解,支持 ?category=&q= 过滤搜索
 	mux.Handle("/api/v1/commands", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(commandbookHandler.Commands)))
 	mux.Handle("/api/v1/commands/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(commandbookHandler.Command)))
+	// 命令手册:AI 智能解析 AI 解释文本并预填命令字段
+	mux.Handle("/api/v1/commands/parse-ai", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(commandbookHandler.ParseAI)))
 
 	// 文件系统管理:目录扫描/存储分析/权限查看,仅 macOS/Linux 可用
 	filesystemHandler := filesystem.NewHandler()

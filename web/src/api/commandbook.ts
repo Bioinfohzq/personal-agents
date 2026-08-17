@@ -3,6 +3,8 @@ import type {
   CommandDetail,
   CommandInput,
   CommandSummary,
+  ParseAIRequest,
+  ParseAIResponse,
 } from '../types/commandbook';
 
 // listCommands 查询命令列表
@@ -69,4 +71,18 @@ export async function deleteCommand(token: string, commandId: number): Promise<v
     method: 'DELETE',
   });
   await assertBusinessResponse(response, '删除命令失败');
+}
+
+// parseCommandAI 智能解析 AI 解释文本并预填命令字段
+export async function parseCommandAI(
+  token: string,
+  request: ParseAIRequest,
+): Promise<ParseAIResponse> {
+  const response = await businessFetch(token, '/api/v1/commands/parse-ai', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+  await assertBusinessResponse(response, 'AI 解析失败');
+
+  return response.json() as Promise<ParseAIResponse>;
 }

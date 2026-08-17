@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"personal-agents/backend/internal/config"
 	"personal-agents/backend/internal/database"
 	"personal-agents/backend/internal/middleware"
 )
@@ -30,6 +31,7 @@ var validCategories = map[string]bool{
 // Handler 命令手册 HTTP 处理器
 type Handler struct {
 	store *database.Store
+	llm   config.LLMConfig
 }
 
 // CommandRequest 创建/更新命令请求体
@@ -84,8 +86,8 @@ type commandRecord struct {
 }
 
 // NewHandler 创建命令手册处理器
-func NewHandler(store *database.Store) *Handler {
-	return &Handler{store: store}
+func NewHandler(store *database.Store, llm config.LLMConfig) *Handler {
+	return &Handler{store: store, llm: llm}
 }
 
 // Commands 处理 /api/v1/commands 路由(GET 列表 / POST 创建)

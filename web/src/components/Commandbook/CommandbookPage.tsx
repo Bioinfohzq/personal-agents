@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
 import {
-  Book,
   Copy,
   ExternalLink,
   Loader2,
@@ -10,6 +9,7 @@ import {
   Plus,
   Search,
   Trash2,
+  Wand2,
   X,
 } from 'lucide-react';
 import {
@@ -17,6 +17,7 @@ import {
   deleteCommand,
   getCommand,
   listCommands,
+  parseCommandAI,
   updateCommand,
 } from '../../api/commandbook';
 import { isUnauthorizedError } from '../../api/http';
@@ -30,6 +31,7 @@ import type {
   CommandDetail,
   CommandInput,
   CommandSummary,
+  ParseAIResponse,
 } from '../../types/commandbook';
 import { useAuth } from '../../auth/AuthContext';
 
@@ -80,6 +82,11 @@ export function CommandbookPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [drawerError, setDrawerError] = useState<string | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+
+  // --- AI 智能预填状态 ---
+  const [aiRawText, setAiRawText] = useState('');
+  const [isParsing, setIsParsing] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   // --- 搜索防抖 ---
   // 输入时 300ms 防抖触发后端搜索,避免每键一次请求
@@ -178,6 +185,7 @@ export function CommandbookPage() {
     setSelectedDetail(null);
     setFormValues({ ...emptyCommandForm, category: selectedCategory || 'linux' });
     setDrawerError(null);
+    resetAIState();
     setDrawerMode('create');
   }
 
@@ -195,6 +203,7 @@ export function CommandbookPage() {
       reference_url: selectedDetail.reference_url ?? '',
     });
     setDrawerError(null);
+    resetAIState();
     setDrawerMode('edit');
   }
 
@@ -205,6 +214,48 @@ export function CommandbookPage() {
     setSelectedDetail(null);
     setFormValues(emptyCommandForm);
     setDrawerError(null);
+    resetAIState();
+  }
+
+  function resetAIState() {
+    setAiRawText('');
+    setIsParsing(false);
+    setAiError(null);
+  }
+
+  // AI 智能解析 AI 解释文本并回填表单
+  async function handleParseAI() {
+    const rawText = aiRawText.trim();
+    if (!rawText) {
+      setAiError('请先粘贴 AI 解释文本');
+      return;
+    }
+
+    setIsParsing(true);
+    setAiError(null);
+    try {
+      const result = await parseCommandAI(token, {
+        raw_text: rawText,
+        category: formValues.category,
+      });
+
+      setFormValues((prev) => ({
+        ...prev,
+        title: result.title || prev.title,
+        command_text: result.command_text || prev.command_text,
+        category: result.category || prev.category,
+        sub_category: result.sub_category || prev.sub_category,
+        introduction: result.introduction || prev.introduction,
+        parameters: result.parameters || prev.parameters,
+        notes: result.notes || prev.notes,
+        reference_url: result.reference_url || prev.reference_url,
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'AI 解析失败';
+      setAiError(message);
+    } finally {
+      setIsParsing(false);
+    }
   }
 
   // 提交表单(创建或编辑)
@@ -312,39 +363,27 @@ export function CommandbookPage() {
 
   return (
     <div className="flex h-full flex-col bg-gray-50">
-      {/* 顶部标题栏 */}
-      <div className="border-b border-gray-200 bg-white px-6 py-4 shrink-0">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <Book className="h-6 w-6 text-indigo-600" />
-            <div>
-              <h1 className="text-lg font-semibold text-gray-900">命令手册</h1>
-              <p className="text-sm text-gray-500">记录各类命令及个人理解,搜索即得</p>
-            </div>
-          </div>
-
-          {/* 搜索框:输入时 300ms 防抖触发后端搜索 */}
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-              <input
-                type="text"
-                value={searchKeyword}
-                onChange={(e) => handleSearchInput(e.target.value)}
-                placeholder="搜索命令/关键词..."
-                className="w-72 rounded-lg border border-gray-300 pl-9 pr-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              />
-            </div>
-            <button
-              type="button"
-              onClick={openCreateForm}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-            >
-              <Plus size={16} />
-              新建命令
-            </button>
-          </div>
+      {/* 顶部操作栏:搜索 + 新建 */}
+      <div className="border-b border-gray-200 bg-white px-6 py-3 shrink-0 flex items-center justify-end gap-3">
+        {/* 搜索框:输入时 300ms 防抖触发后端搜索 */}
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <input
+            type="text"
+            value={searchKeyword}
+            onChange={(e) => handleSearchInput(e.target.value)}
+            placeholder="搜索命令/关键词..."
+            className="w-64 rounded-lg border border-gray-300 pl-9 pr-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          />
         </div>
+        <button
+          type="button"
+          onClick={openCreateForm}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          <Plus size={16} />
+          新建命令
+        </button>
       </div>
 
       {/* 主体三栏布局:左侧分类树最窄,中间列表固定宽度,右侧详情/编辑占剩余空间 */}
@@ -515,6 +554,11 @@ export function CommandbookPage() {
                   onCancel={closeDrawer}
                   isSubmitting={isSubmitting}
                   submitLabel={drawerMode === 'create' ? '创建' : '保存'}
+                  aiRawText={aiRawText}
+                  onAiRawTextChange={setAiRawText}
+                  isParsing={isParsing}
+                  aiError={aiError}
+                  onParseAI={handleParseAI}
                 />
               )}
             </div>
@@ -698,8 +742,25 @@ function CommandForm(props: {
   onCancel: () => void;
   isSubmitting: boolean;
   submitLabel: string;
+  aiRawText: string;
+  onAiRawTextChange: (value: string) => void;
+  isParsing: boolean;
+  aiError: string | null;
+  onParseAI: () => void;
 }) {
-  const { values, onChange, onSubmit, onCancel, isSubmitting, submitLabel } = props;
+  const {
+    values,
+    onChange,
+    onSubmit,
+    onCancel,
+    isSubmitting,
+    submitLabel,
+    aiRawText,
+    onAiRawTextChange,
+    isParsing,
+    aiError,
+    onParseAI,
+  } = props;
 
   function updateField<K extends keyof CommandInput>(key: K, value: CommandInput[K]) {
     onChange({ ...values, [key]: value });
@@ -707,6 +768,33 @@ function CommandForm(props: {
 
   return (
     <form onSubmit={onSubmit} className="px-5 py-4 space-y-4">
+      {/* AI 智能预填 */}
+      <div className="rounded-lg border border-indigo-100 bg-indigo-50/50 p-3 space-y-2">
+        <div className="flex items-center gap-1.5 text-sm font-medium text-indigo-700">
+          <Wand2 size={16} />
+          AI 智能预填
+        </div>
+        <textarea
+          value={aiRawText}
+          onChange={(e) => onAiRawTextChange(e.target.value)}
+          placeholder="把 AI 对命令的解释全文粘贴到这里,点击解析后会自动预填下方字段..."
+          rows={4}
+          className="w-full rounded-lg border border-indigo-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 bg-white"
+        />
+        {aiError && (
+          <div className="text-xs text-red-600">{aiError}</div>
+        )}
+        <button
+          type="button"
+          onClick={onParseAI}
+          disabled={isParsing}
+          className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+        >
+          {isParsing ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+          {isParsing ? '解析中...' : '一键解析'}
+        </button>
+      </div>
+
       {/* 标题/一句话含义(合并字段) */}
       <label className="block">
         <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">标题 / 一句话含义</span>

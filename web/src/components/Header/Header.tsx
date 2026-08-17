@@ -1,6 +1,17 @@
-import { Bot, KeyRound, PanelLeftClose, PanelLeftOpen, PlusCircle } from 'lucide-react';
+import {
+  Book,
+  Bot,
+  CalendarDays,
+  HardDrive,
+  KeyRound,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PlusCircle,
+} from 'lucide-react';
+import { useMemo } from 'react';
 import { useLocation } from 'react-router-dom';
 import type { AuthUser } from '../../api/auth';
+import type { LucideIcon } from 'lucide-react';
 
 /**
  * Header 顶部导航栏组件
@@ -30,13 +41,30 @@ export function Header({
   onCreateThread,
   onLogout,
 }: HeaderProps) {
-  // 从 URL 路径判断当前页面:以 /chat 开头就是聊天页面
+  // 从 URL 路径判断当前页面,动态显示标题和图标
   const location = useLocation();
   const isChatView = location.pathname.startsWith('/chat');
 
-  const title = isChatView ? 'AI 助理' : '密码本';
-  const subtitle = isChatView ? 'LangGraph 连接正常' : '个人账号资料管理';
-  const Icon = isChatView ? Bot : KeyRound;
+  const pageMeta = useMemo<{ title: string; subtitle: string; icon: LucideIcon }>(() => {
+    if (location.pathname.startsWith('/chat')) {
+      return { title: 'AI 助理', subtitle: 'LangGraph 连接正常', icon: Bot };
+    }
+    if (location.pathname.startsWith('/commandbook')) {
+      return { title: '命令手册', subtitle: '记录各类命令及个人理解', icon: Book };
+    }
+    if (location.pathname.startsWith('/schedule')) {
+      return { title: '日程', subtitle: '日程安排与提醒管理', icon: CalendarDays };
+    }
+    if (location.pathname.startsWith('/filesystem')) {
+      return { title: '文件系统', subtitle: '目录扫描与存储分析', icon: HardDrive };
+    }
+    if (location.pathname.startsWith('/passwordbook')) {
+      return { title: '密码本', subtitle: '个人账号资料管理', icon: KeyRound };
+    }
+    return { title: '个人助手', subtitle: '', icon: Bot };
+  }, [location.pathname]);
+
+  const { title, subtitle, icon: Icon } = pageMeta;
 
   return (
     <header className="bg-white border-b shadow-sm px-4 py-3 flex items-center justify-between shrink-0 h-[68px]">

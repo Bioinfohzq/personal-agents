@@ -58,6 +58,24 @@ export const emptyCommandForm: CommandInput = {
   reference_url: '',
 };
 
+// AI 解析请求
+export interface ParseAIRequest {
+  raw_text: string;
+  category: string;
+}
+
+// AI 解析结果
+export interface ParseAIResponse {
+  title: string;
+  command_text: string;
+  category: string;
+  sub_category: string;
+  introduction: string;
+  parameters: string;
+  notes: string;
+  reference_url: string;
+}
+
 // 根据分类值获取中文标签
 export function getCategoryLabel(value: string): string {
   return COMMAND_CATEGORIES.find((item) => item.value === value)?.label ?? value;
