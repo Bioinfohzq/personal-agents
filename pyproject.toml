@@ -21,5 +21,6 @@ mongodb = ["langgraph-checkpoint-mongodb>=0.1.0"]
 
 [dependency-groups]
 dev = [
+    "debugpy>=1.8.21",
     "langgraph-cli[inmem]",
 ]
