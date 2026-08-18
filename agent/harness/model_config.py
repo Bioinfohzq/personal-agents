@@ -40,7 +40,7 @@ PROVIDERS: dict[str, ProviderConfig] = {
         base_url_env="ZHIPU_BASE_URL",
     ),
     "doubao": ProviderConfig(
-        base_url="",
+        base_url="https://ark.cn-beijing.volces.com/api/v3",
         api_key_env="DOUBAO_API_KEY",
         base_url_env="DOUBAO_BASE_URL",
     ),
@@ -65,14 +65,15 @@ MODELS: dict[str, str] = {
     # https://api.deepseek.com (OpenAI 兼容)
     "deepseek-v4-flash": "deepseek",
     "deepseek-v4-pro": "deepseek",
-    # 将于 2026/07/24 弃用
-    "deepseek-chat": "deepseek",
-    "deepseek-reasoner": "deepseek",
+    #doubao
+    "deepseek-v4-pro-260425": "doubao",
+    "deepseek-v4-flash-260425": "doubao",
+    "doubao-seed-2-0-lite-260428": "doubao",
 }
 
 
 def get_default_model_key() -> str:
-    model_key = os.getenv("DEFAULT_MODEL") or os.getenv("MODEL_NAME", "")
+    model_key = os.getenv("MODEL_NAME", "") or os.getenv("DEFAULT_MODEL", "")
     if not model_key:
         raise ValueError("DEFAULT_MODEL 或 MODEL_NAME 未配置或为空")
     return model_key
