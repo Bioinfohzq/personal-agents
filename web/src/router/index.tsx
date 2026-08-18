@@ -6,7 +6,6 @@ import { LoginPage } from '../components/Auth/LoginPage';
 import { PasswordbookPage } from '../components/Passwordbook/PasswordbookPage';
 import { SchedulePage } from '../components/Schedule/SchedulePage';
 import { FileSystemPage } from '../components/FileSystem/FileSystemPage';
-import { CommandbookPage } from '../components/Commandbook/CommandbookPage';
 import { KnowledgebookPage } from '../components/Knowledgebook/KnowledgebookPage';
 
 /**
@@ -57,10 +56,10 @@ export const router = createBrowserRouter([
           { path: 'schedule', element: <SchedulePage /> },
           // 文件系统页(目录扫描/存储分析/权限查看,仅 macOS/Linux)
           { path: 'filesystem', element: <FileSystemPage /> },
-          // 命令手册(记录各类命令及个人理解,支持搜索)
-          { path: 'commandbook', element: <CommandbookPage /> },
-          // 知识库(记录结构化知识点,支持多类型和 AI 一键导入)
+          // 知识中枢:整合知识库与命令手册,通过 ?view=commands 切换到命令视图
           { path: 'knowledgebook', element: <KnowledgebookPage /> },
+          // 命令手册旧路由重定向到知识中枢命令视图
+          { path: 'commandbook', element: <Navigate to="/knowledgebook?view=commands" replace /> },
           // 未知路由重定向到聊天页
           { path: '*', element: <Navigate to="/chat" replace /> },
         ],

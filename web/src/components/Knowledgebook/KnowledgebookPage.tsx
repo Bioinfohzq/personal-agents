@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import {
   BookOpen,
   Copy,
@@ -9,10 +10,13 @@ import {
   Pencil,
   Plus,
   Search,
+  Terminal,
   Trash2,
   Wand2,
   X,
 } from 'lucide-react';
+import { CommandbookPage } from '../Commandbook/CommandbookPage';
+import type { CommandbookPageRef } from '../Commandbook/CommandbookPage';
 import {
   createKnowledgeItem,
   deleteKnowledgeItem,
@@ -21,10 +25,11 @@ import {
   parseKnowledgeAI,
   updateKnowledgeItem,
 } from '../../api/knowledgebook';
+
 import { isUnauthorizedError } from '../../api/http';
 import {
   emptyKnowledgeForm,
-  getCategoryLabel,
+  getCategoryLabel as getKnowledgeCategoryLabel,
   getRiskColor,
   getRiskLabel,
   parseExtra,
@@ -41,31 +46,57 @@ import type {
   KnowledgeExtra,
   KnowledgeInput,
   KnowledgeSummary,
-  ParseAIResponse,
   SystemPathExtra,
   UrlResourceExtra,
 } from '../../types/knowledgebook';
+
 import { useAuth } from '../../auth/AuthContext';
 
 type DrawerMode = 'create' | 'edit' | 'view';
+type HubView = 'knowledge' | 'commands';
 
 /**
- * KnowledgebookPage 知识库页面
+ * KnowledgebookPage 知识中枢页面
  *
- * 三栏布局:
- *   左:分类树(全部 / 各知识类型)
- *   中:知识列表卡片(按选中分类 + 搜索关键词过滤)
- *   右:抽屉(只读详情 / 编辑表单共用同一区域)
+ * 将原来的知识库和命令手册合并为统一的"知识中枢":
+ *   顶部:视图切换 Tab(知识 / 命令) + 搜索 + 新建
+ *   左:分类树(根据当前视图显示不同分类)
+ *   中:列表卡片(知识卡片 / 命令卡片)
+ *   右:常驻详情/编辑面板(不再是从右侧滑出的抽屉)
  */
 export function KnowledgebookPage() {
   const { session, logout } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  if (session?.isGuest === true) {
-    return <Navigate to="/chat" replace />;
-  }
+  const isGuest = session?.isGuest === true;
 
   const token = session!.token;
   const onSessionExpired = logout;
+
+  // --- 视图切换:知识 / 命令 ---
+  const [activeView, setActiveView] = useState<HubView>(() => {
+    const view = searchParams.get('view');
+    return view === 'commands' ? 'commands' : 'knowledge';
+  });
+
+  // 命令视图搜索框状态(与知识视图独立)
+  const [commandSearchKeyword, setCommandSearchKeyword] = useState('');
+  const commandViewRef = useRef<CommandbookPageRef>(null);
+
+  function handleSwitchView(view: HubView) {
+    setActiveView(view);
+    setSearchParams(view === 'commands' ? { view: 'commands' } : {});
+    // 切换视图时重置当前选中,避免右侧面板显示旧数据
+    setDrawerMode(null);
+    setSelectedSummary(null);
+    setSelectedDetail(null);
+    setDrawerError(null);
+    resetAIState();
+    // 切回知识视图时清空命令搜索词,下次进入命令视图重新加载全部
+    if (view === 'knowledge') {
+      setCommandSearchKeyword('');
+    }
+  }
 
   // --- 列表状态 ---
   const [selectedCategory, setSelectedCategory] = useState<string>('');
@@ -348,31 +379,88 @@ export function KnowledgebookPage() {
   }, [allItems]);
 
   return (
-    <div className="flex h-full flex-col bg-gray-50">
-      {/* 顶部操作栏 */}
-      <div className="border-b border-gray-200 bg-white px-6 py-3 shrink-0 flex items-center justify-end gap-3">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-          <input
-            type="text"
-            value={searchKeyword}
-            onChange={(e) => handleSearchInput(e.target.value)}
-            placeholder="搜索知识/关键词..."
-            className="w-64 rounded-lg border border-gray-300 pl-9 pr-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          />
+    <>
+      {isGuest && <Navigate to="/chat" replace />}
+      <div className="flex h-full flex-col bg-gray-50">
+        {/* 顶部操作栏 */}
+        <div className="border-b border-gray-200 bg-white px-6 py-3 shrink-0 flex items-center justify-between gap-3">
+        {/* 左侧:知识中枢视图切换 */}
+        <div className="flex items-center gap-1 rounded-xl bg-gray-100 p-1">
+          <button
+            type="button"
+            onClick={() => handleSwitchView('knowledge')}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+              activeView === 'knowledge'
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200/50'
+            }`}
+          >
+            <BookOpen size={16} />
+            知识
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSwitchView('commands')}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+              activeView === 'commands'
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200/50'
+            }`}
+          >
+            <Terminal size={16} />
+            命令
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={openCreateForm}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-        >
-          <Plus size={16} />
-          新建知识
-        </button>
+
+        {/* 右侧:搜索 + 新建(知识与命令视图共用顶栏位置,内容根据视图切换) */}
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <input
+              type="text"
+              value={activeView === 'commands' ? commandSearchKeyword : searchKeyword}
+              onChange={(e) =>
+                activeView === 'commands'
+                  ? setCommandSearchKeyword(e.target.value)
+                  : handleSearchInput(e.target.value)
+              }
+              placeholder={activeView === 'commands' ? '搜索命令/关键词...' : '搜索知识/关键词...'}
+              className="w-64 rounded-lg border border-gray-300 pl-9 pr-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+          </div>
+          {activeView === 'commands' ? (
+            <button
+              type="button"
+              onClick={() => commandViewRef.current?.openCreateForm()}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              <Plus size={16} />
+              新建命令
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={openCreateForm}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              <Plus size={16} />
+              新建知识
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* 主体三栏布局 */}
-      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[180px_340px_1fr] gap-4 p-6">
+      {/* 主体内容区 */}
+      <div className={`flex-1 min-h-0 bg-gray-50 ${activeView === 'knowledge' ? 'p-6' : ''}`}>
+        {activeView === 'commands' ? (
+          <CommandbookPage
+            ref={commandViewRef}
+            hideHeader
+            searchKeyword={commandSearchKeyword}
+            onSearchKeywordChange={setCommandSearchKeyword}
+          />
+        ) : (
+          <div className="h-full grid grid-cols-1 lg:grid-cols-[180px_340px_1fr] gap-4">
         {/* 左侧:分类树 */}
         <aside className="hidden lg:flex flex-col rounded-2xl border border-gray-200 bg-white overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-100 text-xs font-semibold text-gray-500 uppercase tracking-wider">
@@ -401,7 +489,7 @@ export function KnowledgebookPage() {
         <section className="min-h-0 rounded-2xl border border-gray-200 bg-white overflow-hidden flex flex-col">
           <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-gray-800">
-              {selectedCategory ? getCategoryLabel(selectedCategory) : '全部知识'}
+              {selectedCategory ? getKnowledgeCategoryLabel(selectedCategory) : '全部知识'}
               <span className="ml-2 text-xs text-gray-500">{items.length} 项</span>
             </h2>
           </div>
@@ -439,7 +527,7 @@ export function KnowledgebookPage() {
                       <span className="text-sm font-semibold text-gray-900 truncate">
                         {item.title}
                       </span>
-                      <CategoryBadge value={item.category} />
+                      <KnowledgeCategoryBadge value={item.category} />
                     </div>
                     {item.summary && (
                       <div className="mt-1.5 text-xs text-gray-500 line-clamp-2">
@@ -465,93 +553,107 @@ export function KnowledgebookPage() {
           </div>
         </section>
 
-        {/* 右侧:抽屉 */}
-        {drawerMode && (
-          <aside className="min-h-0 rounded-2xl border border-gray-200 bg-white overflow-hidden flex flex-col">
-            <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-gray-800">
-                {drawerMode === 'create' && '新建知识'}
-                {drawerMode === 'edit' && '编辑知识'}
-                {drawerMode === 'view' && '知识详情'}
-              </h2>
-              <div className="flex items-center gap-2">
-                {drawerMode === 'view' && (
-                  <>
+        {/* 右侧:常驻详情/编辑面板 */}
+        <aside className="min-h-0 rounded-2xl border border-gray-200 bg-white overflow-hidden flex flex-col">
+          {drawerMode ? (
+            <>
+              <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-gray-800">
+                  {drawerMode === 'create' && '新建知识'}
+                  {drawerMode === 'edit' && '编辑知识'}
+                  {drawerMode === 'view' && '知识详情'}
+                </h2>
+                <div className="flex items-center gap-2">
+                  {drawerMode === 'view' && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={openEditForm}
+                        className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        <Pencil size={12} />
+                        编辑
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleDelete()}
+                        disabled={isSubmitting}
+                        className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                      >
+                        <Trash2 size={12} />
+                        删除
+                      </button>
+                    </>
+                  )}
+                  {(drawerMode === 'create' || drawerMode === 'edit') && (
                     <button
                       type="button"
-                      onClick={openEditForm}
+                      onClick={closeDrawer}
                       className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
                     >
-                      <Pencil size={12} />
-                      编辑
+                      <X size={12} />
+                      取消
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleDelete()}
-                      disabled={isSubmitting}
-                      className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
-                    >
-                      <Trash2 size={12} />
-                      删除
-                    </button>
-                  </>
-                )}
-                <button
-                  type="button"
-                  onClick={closeDrawer}
-                  className="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto custom-scrollbar">
-              {drawerError && (
-                <div className="mx-5 mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
-                  {drawerError}
+                  )}
                 </div>
-              )}
+              </div>
 
-              {drawerMode === 'view' && (
-                isLoadingDetail ? (
-                  <div className="flex items-center justify-center gap-2 py-16 text-sm text-gray-500">
-                    <Loader2 size={16} className="animate-spin" />
-                    加载中...
+              <div className="flex-1 overflow-y-auto custom-scrollbar">
+                {drawerError && (
+                  <div className="mx-5 mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
+                    {drawerError}
                   </div>
-                ) : selectedDetail ? (
-                  <KnowledgeDetailView
-                    detail={selectedDetail}
-                    onCopy={handleCopy}
-                    copyFeedback={copyFeedback}
+                )}
+
+                {drawerMode === 'view' && (
+                  isLoadingDetail ? (
+                    <div className="flex items-center justify-center gap-2 py-16 text-sm text-gray-500">
+                      <Loader2 size={16} className="animate-spin" />
+                      加载中...
+                    </div>
+                  ) : selectedDetail ? (
+                    <KnowledgeDetailView
+                      detail={selectedDetail}
+                      onCopy={handleCopy}
+                      copyFeedback={copyFeedback}
+                    />
+                  ) : (
+                    <div className="py-16 text-center text-sm text-gray-500">
+                      无法加载知识详情
+                    </div>
+                  )
+                )}
+
+                {(drawerMode === 'create' || drawerMode === 'edit') && (
+                  <KnowledgeForm
+                    values={formValues}
+                    onChange={setFormValues}
+                    onSubmit={handleSubmit}
+                    onCancel={closeDrawer}
+                    isSubmitting={isSubmitting}
+                    submitLabel={drawerMode === 'create' ? '创建' : '保存'}
+                    aiRawText={aiRawText}
+                    onAiRawTextChange={setAiRawText}
+                    isParsing={isParsing}
+                    aiError={aiError}
+                    onParseAI={handleParseAI}
                   />
-                ) : (
-                  <div className="py-16 text-center text-sm text-gray-500">
-                    无法加载知识详情
-                  </div>
-                )
-              )}
-
-              {(drawerMode === 'create' || drawerMode === 'edit') && (
-                <KnowledgeForm
-                  values={formValues}
-                  onChange={setFormValues}
-                  onSubmit={handleSubmit}
-                  onCancel={closeDrawer}
-                  isSubmitting={isSubmitting}
-                  submitLabel={drawerMode === 'create' ? '创建' : '保存'}
-                  aiRawText={aiRawText}
-                  onAiRawTextChange={setAiRawText}
-                  isParsing={isParsing}
-                  aiError={aiError}
-                  onParseAI={handleParseAI}
-                />
-              )}
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-gray-500">
+              <BookOpen size={40} className="text-gray-300" />
+              <p>选择一项知识查看详情</p>
+              <p className="text-xs text-gray-400">或点击右上角"新建知识"开始记录</p>
             </div>
-          </aside>
-        )}
-      </div>
+          )}
+        </aside>
+        </div>
+      )}
     </div>
+  </div>
+  </>
   );
 }
 
@@ -581,10 +683,10 @@ function CategoryItem(props: {
   );
 }
 
-function CategoryBadge(props: { value: string }) {
+function KnowledgeCategoryBadge(props: { value: string }) {
   return (
     <span className="shrink-0 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600">
-      {getCategoryLabel(props.value)}
+      {getKnowledgeCategoryLabel(props.value)}
     </span>
   );
 }
@@ -601,7 +703,7 @@ function KnowledgeDetailView(props: {
     <div className="px-5 py-4 pb-20 space-y-4">
       <div>
         <div className="flex items-center gap-2 mb-1 flex-wrap">
-          <CategoryBadge value={detail.category} />
+          <KnowledgeCategoryBadge value={detail.category} />
           {detail.sub_category && (
             <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
               {detail.sub_category}

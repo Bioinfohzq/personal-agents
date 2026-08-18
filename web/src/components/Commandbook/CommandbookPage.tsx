@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
 import {
@@ -31,7 +39,6 @@ import type {
   CommandDetail,
   CommandInput,
   CommandSummary,
-  ParseAIResponse,
 } from '../../types/commandbook';
 import { useAuth } from '../../auth/AuthContext';
 
@@ -119,20 +126,44 @@ function serializeScenarios(scenarios: Scenario[]): string {
  *   点详情顶部"编辑" → 同一抽屉切换为表单
  *   点顶部"+ 新建命令" → 右侧抽屉打开空白表单
  */
-export function CommandbookPage() {
-  const { session, logout } = useAuth();
+export interface CommandbookPageProps {
+  hideHeader?: boolean;
+  searchKeyword?: string;
+  onSearchKeywordChange?: (value: string) => void;
+}
 
-  // 访客模式拦截:访客没有真实 token,重定向回聊天页
-  if (session?.isGuest === true) {
-    return <Navigate to="/chat" replace />;
-  }
+export interface CommandbookPageRef {
+  openCreateForm: () => void;
+}
 
-  const token = session!.token;
-  const onSessionExpired = logout;
+export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPageProps>(
+  function CommandbookPage(props, ref) {
+    const { hideHeader = false, searchKeyword: externalSearchKeyword, onSearchKeywordChange } = props;
+    const { session, logout } = useAuth();
 
-  // --- 列表状态 ---
-  const [selectedCategory, setSelectedCategory] = useState<string>('');  // 空字符串 = 全部
-  const [searchKeyword, setSearchKeyword] = useState('');
+    // 访客模式拦截:访客没有真实 token,重定向回聊天页
+    const isGuest = session?.isGuest === true;
+
+    const token = session!.token;
+    const onSessionExpired = logout;
+
+    // 搜索关键词支持受控/非受控两种模式
+    const isSearchControlled = externalSearchKeyword !== undefined;
+    const [internalSearchKeyword, setInternalSearchKeyword] = useState('');
+    const searchKeyword = isSearchControlled ? externalSearchKeyword : internalSearchKeyword;
+    const setSearchKeyword = useCallback(
+      (value: string) => {
+        if (isSearchControlled) {
+          onSearchKeywordChange?.(value);
+        } else {
+          setInternalSearchKeyword(value);
+        }
+      },
+      [isSearchControlled, onSearchKeywordChange],
+    );
+
+    // --- 列表状态 ---
+    const [selectedCategory, setSelectedCategory] = useState<string>('');  // 空字符串 = 全部
   const [commands, setCommands] = useState<CommandSummary[]>([]);
   const [allCommands, setAllCommands] = useState<CommandSummary[]>([]);
   const [isLoadingList, setIsLoadingList] = useState(true);
@@ -159,22 +190,7 @@ export function CommandbookPage() {
 
   const handleSearchInput = useCallback((value: string) => {
     setSearchKeyword(value);
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-    }
-    debounceTimerRef.current = setTimeout(() => {
-      void loadCommands(selectedCategory, value);
-    }, 300);
-  }, [selectedCategory]);
-
-  // 清理防抖定时器
-  useEffect(() => {
-    return () => {
-      if (debounceTimerRef.current) {
-        clearTimeout(debounceTimerRef.current);
-      }
-    };
-  }, []);
+  }, [setSearchKeyword]);
 
   // --- API 调用 ---
 
@@ -210,20 +226,33 @@ export function CommandbookPage() {
     }
   }, [token, handleApiError]);
 
-  // 首次进入加载全部命令(列表 + 分类计数)
+  // 分类或搜索词变化时 300ms 防抖加载列表(同时负责首次加载)
   useEffect(() => {
-    void loadCommands('', '');
-    void loadCategoryCounts();
-  }, [loadCommands, loadCategoryCounts]);
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    debounceTimerRef.current = setTimeout(() => {
+      void loadCommands(selectedCategory, searchKeyword);
+    }, 300);
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, [selectedCategory, searchKeyword, loadCommands]);
 
-  // 点分类:切换 category 后重新拉列表,并关闭右侧抽屉避免显示旧分类的命令
+  // 首次进入加载分类计数
+  useEffect(() => {
+    void loadCategoryCounts();
+  }, [loadCategoryCounts]);
+
+  // 点分类:切换 category 后关闭右侧抽屉避免显示旧分类的命令
   function handleSelectCategory(category: string) {
     setSelectedCategory(category);
     setDrawerMode(null);
     setSelectedSummary(null);
     setSelectedDetail(null);
     setDrawerError(null);
-    void loadCommands(category, searchKeyword);
   }
 
   // 打开命令详情(只读模式)
@@ -253,6 +282,11 @@ export function CommandbookPage() {
     resetAIState();
     setDrawerMode('create');
   }
+
+  // 向父组件暴露 openCreateForm,便于知识中枢统一顶栏新建入口
+  useImperativeHandle(ref, () => ({
+    openCreateForm,
+  }));
 
   // 打开编辑表单(预填已有命令数据)
   function openEditForm() {
@@ -430,32 +464,36 @@ export function CommandbookPage() {
   }, [allCommands]);
 
   return (
-    <div className="flex h-full flex-col bg-gray-50">
-      {/* 顶部操作栏:搜索 + 新建 */}
-      <div className="border-b border-gray-200 bg-white px-6 py-3 shrink-0 flex items-center justify-end gap-3">
-        {/* 搜索框:输入时 300ms 防抖触发后端搜索 */}
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-          <input
-            type="text"
-            value={searchKeyword}
-            onChange={(e) => handleSearchInput(e.target.value)}
-            placeholder="搜索命令/关键词..."
-            className="w-64 rounded-lg border border-gray-300 pl-9 pr-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          />
+    <>
+      {isGuest && <Navigate to="/chat" replace />}
+      <div className={hideHeader ? 'h-full bg-gray-50' : 'flex h-full flex-col bg-gray-50'}>
+        {/* 顶部操作栏:搜索 + 新建 */}
+        {!hideHeader && (
+          <div className="border-b border-gray-200 bg-white px-6 py-3 shrink-0 flex items-center justify-end gap-3">
+            {/* 搜索框:输入时 300ms 防抖触发后端搜索 */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <input
+                type="text"
+                value={searchKeyword}
+                onChange={(e) => handleSearchInput(e.target.value)}
+                placeholder="搜索命令/关键词..."
+                className="w-64 rounded-lg border border-gray-300 pl-9 pr-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+            </div>
+            <button
+            type="button"
+            onClick={openCreateForm}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          >
+            <Plus size={16} />
+            新建命令
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={openCreateForm}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-        >
-          <Plus size={16} />
-          新建命令
-        </button>
-      </div>
+      )}
 
       {/* 主体三栏布局:左侧分类树最窄,中间列表固定宽度,右侧详情/编辑占剩余空间 */}
-      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[160px_340px_1fr] gap-4 p-6">
+      <div className={hideHeader ? 'h-full grid grid-cols-1 lg:grid-cols-[160px_340px_1fr] gap-4 p-6' : 'flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[160px_340px_1fr] gap-4 p-6'}>
         {/* 左侧:分类树 */}
         <aside className="hidden lg:flex flex-col rounded-2xl border border-gray-200 bg-white overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-100 text-xs font-semibold text-gray-500 uppercase tracking-wider">
@@ -634,8 +672,9 @@ export function CommandbookPage() {
         )}
       </div>
     </div>
+  </>
   );
-}
+});
 
 /** 使用场景结构化编辑器 */
 function ScenarioEditor(props: { value: string; onChange: (value: string) => void }) {
@@ -1107,7 +1146,7 @@ function CommandForm(props: {
           className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
         >
           {isSubmitting ? <Loader2 size={14} className="animate-spin" /> : null}
-          {props.submitLabel}
+          {submitLabel}
         </button>
       </div>
     </form>
