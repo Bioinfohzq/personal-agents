@@ -7,6 +7,7 @@ import { PasswordbookPage } from '../components/Passwordbook/PasswordbookPage';
 import { SchedulePage } from '../components/Schedule/SchedulePage';
 import { FileSystemPage } from '../components/FileSystem/FileSystemPage';
 import { CommandbookPage } from '../components/Commandbook/CommandbookPage';
+import { KnowledgebookPage } from '../components/Knowledgebook/KnowledgebookPage';
 
 /**
  * 路由配置
@@ -58,6 +59,8 @@ export const router = createBrowserRouter([
           { path: 'filesystem', element: <FileSystemPage /> },
           // 命令手册(记录各类命令及个人理解,支持搜索)
           { path: 'commandbook', element: <CommandbookPage /> },
+          // 知识库(记录结构化知识点,支持多类型和 AI 一键导入)
+          { path: 'knowledgebook', element: <KnowledgebookPage /> },
           // 未知路由重定向到聊天页
           { path: '*', element: <Navigate to="/chat" replace /> },
         ],

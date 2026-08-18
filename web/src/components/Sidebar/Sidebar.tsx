@@ -1,4 +1,4 @@
-import { Bot, KeyRound, MessageSquare, Clock, CalendarDays, HardDrive, Book } from 'lucide-react';
+import { Bot, KeyRound, MessageSquare, Clock, CalendarDays, HardDrive, Book, BookOpen } from 'lucide-react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import type { Thread } from '../../types/chat';
 import { formatDate } from '../../utils/format';
@@ -32,6 +32,7 @@ const NAV_ITEMS: Array<{ to: string; label: string; icon: typeof Bot }> = [
   { to: '/passwordbook', label: '密码本', icon: KeyRound },
   { to: '/schedule', label: '日程', icon: CalendarDays },
   { to: '/commandbook', label: '命令手册', icon: Book },
+  { to: '/knowledgebook', label: '知识库', icon: BookOpen },
   { to: '/filesystem', label: '文件系统', icon: HardDrive },
 ];
 
