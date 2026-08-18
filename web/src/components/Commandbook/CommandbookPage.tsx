@@ -38,6 +38,71 @@ import { useAuth } from '../../auth/AuthContext';
 // 表单模式:create 新建 / edit 编辑 / view 只读详情
 type DrawerMode = 'create' | 'edit' | 'view';
 
+// 使用场景结构化项
+interface Scenario {
+  description: string;
+  command: string;
+}
+
+// 阿拉伯数字转中文序号(最多支持到 99)
+function toChineseNumber(num: number): string {
+  const digits = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+  const tens = ['', '十', '二十', '三十', '四十', '五十', '六十', '七十', '八十', '九十'];
+  if (num <= 0) return '';
+  if (num < 10) return digits[num];
+  if (num === 10) return '十';
+  if (num < 20) return '十' + digits[num % 10];
+  if (num % 10 === 0) return tens[Math.floor(num / 10)];
+  return tens[Math.floor(num / 10)] + digits[num % 10];
+}
+
+// 将存储字符串解析为结构化场景列表
+function parseScenarios(text: string): Scenario[] {
+  const lines = text.split('\n');
+  const scenarios: Scenario[] = [];
+  let current: Scenario | null = null;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const scenarioMatch = line.match(/^场景[一二三四五六七八九十百]+[：:]\s*(.*)$/);
+    if (scenarioMatch) {
+      if (current && (current.description.trim() || current.command.trim())) {
+        scenarios.push(current);
+      }
+      current = { description: scenarioMatch[1] ?? '', command: '' };
+    } else if (current) {
+      current.command += (current.command ? '\n' : '') + rawLine;
+    } else {
+      // 没有场景标题时,作为命令兜底
+      current = { description: '', command: rawLine };
+    }
+  }
+
+  if (current && (current.description.trim() || current.command.trim())) {
+    scenarios.push(current);
+  }
+
+  if (scenarios.length === 0) {
+    scenarios.push({ description: '', command: '' });
+  }
+
+  return scenarios;
+}
+
+// 将结构化场景列表序列化为存储字符串
+function serializeScenarios(scenarios: Scenario[]): string {
+  return scenarios
+    .filter((s) => s.description.trim() || s.command.trim())
+    .map((s, idx) => {
+      const prefix = `场景${toChineseNumber(idx + 1)}：${s.description.trim()}`;
+      const command = s.command.trim();
+      return command ? `${prefix}\n${command}` : prefix;
+    })
+    .join('\n\n');
+}
+
 /**
  * CommandbookPage 命令手册页面
  *
@@ -199,6 +264,7 @@ export function CommandbookPage() {
       sub_category: selectedDetail.sub_category ?? '',
       introduction: selectedDetail.introduction ?? '',
       parameters: selectedDetail.parameters ?? '',
+      scenarios: selectedDetail.scenarios ?? '',
       notes: selectedDetail.notes ?? '',
       reference_url: selectedDetail.reference_url ?? '',
     });
@@ -247,6 +313,7 @@ export function CommandbookPage() {
         sub_category: result.sub_category || prev.sub_category,
         introduction: result.introduction || prev.introduction,
         parameters: result.parameters || prev.parameters,
+        scenarios: result.scenarios || prev.scenarios,
         notes: result.notes || prev.notes,
         reference_url: result.reference_url || prev.reference_url,
       }));
@@ -277,6 +344,7 @@ export function CommandbookPage() {
       sub_category: formValues.sub_category.trim(),
       introduction: formValues.introduction.trim(),
       parameters: formValues.parameters.trim(),
+      scenarios: formValues.scenarios.trim(),
       notes: formValues.notes.trim(),
       reference_url: formValues.reference_url.trim(),
     };
@@ -569,6 +637,89 @@ export function CommandbookPage() {
   );
 }
 
+/** 使用场景结构化编辑器 */
+function ScenarioEditor(props: { value: string; onChange: (value: string) => void }) {
+  const { value, onChange } = props;
+  const [scenarios, setScenarios] = useState<Scenario[]>(() => parseScenarios(value));
+
+  // 外部 value 变化时(AI 预填/编辑切换)同步内部状态
+  useEffect(() => {
+    setScenarios(parseScenarios(value));
+  }, [value]);
+
+  function updateScenarios(next: Scenario[]) {
+    setScenarios(next);
+    onChange(serializeScenarios(next));
+  }
+
+  function updateScenario(index: number, patch: Partial<Scenario>) {
+    const next = scenarios.map((s, idx) => (idx === index ? { ...s, ...patch } : s));
+    updateScenarios(next);
+  }
+
+  function addScenario() {
+    updateScenarios([...scenarios, { description: '', command: '' }]);
+  }
+
+  function removeScenario(index: number) {
+    const next = scenarios.filter((_, idx) => idx !== index);
+    updateScenarios(next.length > 0 ? next : [{ description: '', command: '' }]);
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">使用场景</span>
+        <button
+          type="button"
+          onClick={addScenario}
+          className="inline-flex items-center gap-1 rounded-lg border border-indigo-200 px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50"
+        >
+          <Plus size={12} />
+          添加场景
+        </button>
+      </div>
+
+      {scenarios.map((scenario, index) => (
+        <div
+          key={index}
+          className="rounded-lg border border-gray-200 bg-white p-3 space-y-2"
+        >
+          <div className="flex items-start gap-2">
+            <span className="shrink-0 pt-2 text-xs font-medium text-indigo-700">
+              场景{toChineseNumber(index + 1)}：
+            </span>
+            <input
+              type="text"
+              value={scenario.description}
+              onChange={(e) => updateScenario(index, { description: e.target.value })}
+              placeholder="描述这个使用场景..."
+              className="flex-1 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+            {scenarios.length > 1 && (
+              <button
+                type="button"
+                onClick={() => removeScenario(index)}
+                className="shrink-0 rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                title="删除场景"
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
+          </div>
+          <textarea
+            value={scenario.command}
+            onChange={(e) => updateScenario(index, { command: e.target.value })}
+            placeholder="在此输入命令和细节..."
+            rows={3}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // --- 子组件 ---
 
 /** 分类树条目 */
@@ -617,7 +768,7 @@ function CommandDetailView(props: {
   const parameters = useMemo(() => parseParameters(detail.parameters), [detail.parameters]);
 
   return (
-    <div className="px-5 py-4 space-y-4">
+    <div className="px-5 py-4 pb-20 space-y-4">
       {/* 标题(兼一句话含义) + 分类标签 */}
       <div>
         <div className="flex items-center gap-2 mb-1">
@@ -699,6 +850,44 @@ function CommandDetailView(props: {
         </div>
       )}
 
+      {/* 使用场景 */}
+      {detail.scenarios && (
+        <div>
+          <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">使用场景</div>
+          <div className="rounded-lg border border-indigo-100 bg-indigo-50/50 p-3 space-y-2">
+            {detail.scenarios.split('\n').reduce<string[][]>((groups, line) => {
+              const trimmed = line.trim();
+              if (!trimmed) return groups;
+              if (trimmed.startsWith('场景')) {
+                groups.push([trimmed]);
+              } else if (groups.length > 0) {
+                groups[groups.length - 1].push(trimmed);
+              } else {
+                groups.push([trimmed]);
+              }
+              return groups;
+            }, []).map((group, idx) => (
+              <div key={idx} className="space-y-1">
+                {group.map((line, lineIdx) =>
+                  line.startsWith('场景') ? (
+                    <div key={lineIdx} className="text-sm font-medium text-indigo-700">
+                      {line}
+                    </div>
+                  ) : (
+                    <pre
+                      key={lineIdx}
+                      className="font-mono text-xs text-gray-800 bg-white rounded px-2 py-1.5 whitespace-pre-wrap break-all"
+                    >
+                      {line}
+                    </pre>
+                  )
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* 我的理解 */}
       {detail.notes && (
         <div>
@@ -767,7 +956,7 @@ function CommandForm(props: {
   }
 
   return (
-    <form onSubmit={onSubmit} className="px-5 py-4 space-y-4">
+    <form onSubmit={onSubmit} className="px-5 py-4 pb-20 space-y-4">
       {/* AI 智能预填 */}
       <div className="rounded-lg border border-indigo-100 bg-indigo-50/50 p-3 space-y-2">
         <div className="flex items-center gap-1.5 text-sm font-medium text-indigo-700">
@@ -875,6 +1064,9 @@ function CommandForm(props: {
           className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
       </label>
+
+      {/* 使用场景 */}
+      <ScenarioEditor value={values.scenarios} onChange={(v) => updateField('scenarios', v)} />
 
       {/* 我的理解 */}
       <label className="block">

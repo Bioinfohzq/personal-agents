@@ -27,6 +27,7 @@ type ParseAIResponse struct {
 	SubCategory  string `json:"sub_category"`
 	Introduction string `json:"introduction"`
 	Parameters   string `json:"parameters"`
+	Scenarios    string `json:"scenarios"`
 	Notes        string `json:"notes"`
 	ReferenceURL string `json:"reference_url"`
 }
@@ -41,8 +42,13 @@ const parseAIPrompt = `你是一位命令手册整理助手。请根据用户提
 5. parameters: 参数说明,每行格式"参数|全称|含义"。只提取解释文本中明确提到的参数,没有就不填。例如:
 -s|--summarize|只显示每个目标的总大小,不展开子目录明细
 -h|--human-readable|人类可读格式(KB/MB/GB)
-6. notes: 个人理解或记忆要点,从解释文本中提炼最实用的信息。如果没有,可以留空。
-7. reference_url: 如果文本中包含官方文档链接,提取出来;否则留空。
+6. scenarios: 使用场景,多行文本。每个场景占两行:第一行是场景描述(以"场景一：""场景二："等开头),第二行是对应的示例命令。例如:
+场景一：查看当前目录总大小
+ du -sh .
+场景二：查看指定目录多层深度
+ du -h --max-depth=1 /var/log
+7. notes: 个人理解或记忆要点,从解释文本中提炼最实用的信息。如果没有,可以留空。
+8. reference_url: 如果文本中包含官方文档链接,提取出来;否则留空。
 
 只能输出 JSON,不要任何 Markdown 代码块标记,不要额外说明。JSON 字段如下:
 {
@@ -51,6 +57,7 @@ const parseAIPrompt = `你是一位命令手册整理助手。请根据用户提
   "sub_category": "",
   "introduction": "",
   "parameters": "",
+  "scenarios": "",
   "notes": "",
   "reference_url": ""
 }
@@ -187,6 +194,7 @@ func (handler *Handler) parseWithLLM(ctx context.Context, rawText string) (*Pars
 	result.SubCategory = strings.TrimSpace(result.SubCategory)
 	result.Introduction = strings.TrimSpace(result.Introduction)
 	result.Parameters = strings.TrimSpace(result.Parameters)
+	result.Scenarios = strings.TrimSpace(result.Scenarios)
 	result.Notes = strings.TrimSpace(result.Notes)
 	result.ReferenceURL = strings.TrimSpace(result.ReferenceURL)
 

@@ -46,6 +46,7 @@ type CommandRequest struct {
 	SubCategory  string `json:"sub_category"`
 	Introduction string `json:"introduction"`
 	Parameters   string `json:"parameters"`
+	Scenarios    string `json:"scenarios"`
 	Notes        string `json:"notes"`
 	ReferenceURL string `json:"reference_url"`
 }
@@ -66,6 +67,7 @@ type CommandDetail struct {
 	CommandSummary
 	Introduction string `json:"introduction,omitempty"`
 	Parameters   string `json:"parameters,omitempty"`
+	Scenarios    string `json:"scenarios,omitempty"`
 	Notes        string `json:"notes,omitempty"`
 	ReferenceURL string `json:"reference_url,omitempty"`
 }
@@ -79,6 +81,7 @@ type commandRecord struct {
 	SubCategory  sql.NullString
 	Introduction sql.NullString
 	Parameters   sql.NullString
+	Scenarios    sql.NullString
 	Notes        sql.NullString
 	ReferenceURL sql.NullString
 	CreatedAt    time.Time
@@ -208,8 +211,8 @@ func (handler *Handler) CreateCommand(w http.ResponseWriter, r *http.Request) {
 
 	result, err := handler.store.DB().ExecContext(
 		r.Context(),
-		`INSERT INTO commands (user_id, title, command_text, category, sub_category, introduction, parameters, notes, reference_url)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO commands (user_id, title, command_text, category, sub_category, introduction, parameters, scenarios, notes, reference_url)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		userID,
 		request.Title,
 		request.CommandText,
@@ -217,6 +220,7 @@ func (handler *Handler) CreateCommand(w http.ResponseWriter, r *http.Request) {
 		nullableString(request.SubCategory),
 		nullableString(request.Introduction),
 		nullableString(request.Parameters),
+		nullableString(request.Scenarios),
 		nullableString(request.Notes),
 		nullableString(request.ReferenceURL),
 	)
@@ -289,7 +293,7 @@ func (handler *Handler) UpdateCommand(w http.ResponseWriter, r *http.Request, co
 	result, err := handler.store.DB().ExecContext(
 		r.Context(),
 		`UPDATE commands
-		 SET title = ?, command_text = ?, category = ?, sub_category = ?, introduction = ?, parameters = ?, notes = ?, reference_url = ?
+		 SET title = ?, command_text = ?, category = ?, sub_category = ?, introduction = ?, parameters = ?, scenarios = ?, notes = ?, reference_url = ?
 		 WHERE id = ? AND user_id = ?`,
 		request.Title,
 		request.CommandText,
@@ -297,6 +301,7 @@ func (handler *Handler) UpdateCommand(w http.ResponseWriter, r *http.Request, co
 		nullableString(request.SubCategory),
 		nullableString(request.Introduction),
 		nullableString(request.Parameters),
+		nullableString(request.Scenarios),
 		nullableString(request.Notes),
 		nullableString(request.ReferenceURL),
 		commandID,
@@ -370,7 +375,7 @@ func (handler *Handler) findCommandDetail(r *http.Request, userID int64, command
 	var record commandRecord
 	row := handler.store.DB().QueryRowContext(
 		r.Context(),
-		`SELECT id, title, command_text, category, sub_category, introduction, parameters, notes, reference_url, created_at, updated_at
+		`SELECT id, title, command_text, category, sub_category, introduction, parameters, scenarios, notes, reference_url, created_at, updated_at
 		 FROM commands
 		 WHERE id = ? AND user_id = ?
 		 LIMIT 1`,
@@ -378,7 +383,7 @@ func (handler *Handler) findCommandDetail(r *http.Request, userID int64, command
 		userID,
 	)
 
-	if err := row.Scan(&record.ID, &record.Title, &record.CommandText, &record.Category, &record.SubCategory, &record.Introduction, &record.Parameters, &record.Notes, &record.ReferenceURL, &record.CreatedAt, &record.UpdatedAt); err != nil {
+	if err := row.Scan(&record.ID, &record.Title, &record.CommandText, &record.Category, &record.SubCategory, &record.Introduction, &record.Parameters, &record.Scenarios, &record.Notes, &record.ReferenceURL, &record.CreatedAt, &record.UpdatedAt); err != nil {
 		return CommandDetail{}, err
 	}
 
@@ -405,6 +410,7 @@ func (request *CommandRequest) normalize() {
 	request.SubCategory = strings.TrimSpace(request.SubCategory)
 	request.Introduction = strings.TrimSpace(request.Introduction)
 	request.Parameters = strings.TrimSpace(request.Parameters)
+	request.Scenarios = strings.TrimSpace(request.Scenarios)
 	request.Notes = strings.TrimSpace(request.Notes)
 	request.ReferenceURL = strings.TrimSpace(request.ReferenceURL)
 }
@@ -428,6 +434,7 @@ func (record commandRecord) detail() CommandDetail {
 		CommandSummary: record.summary(),
 		Introduction:   nullStringValue(record.Introduction),
 		Parameters:     nullStringValue(record.Parameters),
+		Scenarios:      nullStringValue(record.Scenarios),
 		Notes:          nullStringValue(record.Notes),
 		ReferenceURL:   nullStringValue(record.ReferenceURL),
 	}

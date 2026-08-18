@@ -22,10 +22,11 @@ export interface CommandSummary {
   updated_at: string;
 }
 
-// 命令详情(含 introduction / parameters / notes)
+// 命令详情(含 introduction / parameters / scenarios / notes)
 export interface CommandDetail extends CommandSummary {
   introduction?: string;     // 详细介绍
   parameters?: string;       // 多行文本,每行格式 "参数|全称|含义"
+  scenarios?: string;        // 使用场景,多行文本,每个场景两行(描述 + 示例命令)
   notes?: string;            // 我的理解(个人笔记)
   reference_url?: string;    // 官方文档/教程资源链接
 }
@@ -42,6 +43,7 @@ export interface CommandInput {
   sub_category: string;
   introduction: string;
   parameters: string;
+  scenarios: string;
   notes: string;
   reference_url: string;
 }
@@ -54,6 +56,7 @@ export const emptyCommandForm: CommandInput = {
   sub_category: '',
   introduction: '',
   parameters: '',
+  scenarios: '',
   notes: '',
   reference_url: '',
 };
@@ -72,6 +75,7 @@ export interface ParseAIResponse {
   sub_category: string;
   introduction: string;
   parameters: string;
+  scenarios: string;
   notes: string;
   reference_url: string;
 }
