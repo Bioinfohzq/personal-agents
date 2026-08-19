@@ -17,13 +17,13 @@ import (
 // knowledgePathPrefix 单条知识的路由前缀
 const knowledgePathPrefix = "/api/v1/knowledge/"
 
-// 有效分类集合(后端做白名单校验,前端固定列表)
-var validCategories = map[string]bool{
-	"system-path":  true,
-	"url-resource": true,
-	"hardware":     true,
-	"algorithm":    true,
-	"other":        true,
+// isValidCategory 校验分类格式:非空、长度不超过 40、不含空白字符。
+// 前端提供固定分类 + 用户自定义分类,后端只做格式校验,不再维护白名单。
+func isValidCategory(category string) bool {
+	if category == "" || len(category) > 40 {
+		return false
+	}
+	return !strings.ContainsAny(category, " \t\r\n")
 }
 
 // Handler 知识库 HTTP 处理器
@@ -134,7 +134,7 @@ func (handler *Handler) ListKnowledgeItems(w http.ResponseWriter, r *http.Reques
 	category := strings.TrimSpace(r.URL.Query().Get("category"))
 	keyword := strings.TrimSpace(r.URL.Query().Get("q"))
 
-	if category != "" && !validCategories[category] {
+	if category != "" && !isValidCategory(category) {
 		writeError(w, http.StatusBadRequest, "invalid category")
 		return
 	}
@@ -198,7 +198,7 @@ func (handler *Handler) CreateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if !validCategories[request.Category] {
+	if !isValidCategory(request.Category) {
 		writeError(w, http.StatusBadRequest, "invalid category")
 		return
 	}
@@ -284,7 +284,7 @@ func (handler *Handler) UpdateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if !validCategories[request.Category] {
+	if !isValidCategory(request.Category) {
 		writeError(w, http.StatusBadRequest, "invalid category")
 		return
 	}

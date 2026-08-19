@@ -10,6 +10,7 @@ import {
 import type { FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
 import {
+  Check,
   Copy,
   ExternalLink,
   Loader2,
@@ -30,15 +31,19 @@ import {
 } from '../../api/commandbook';
 import { isUnauthorizedError } from '../../api/http';
 import {
-  COMMAND_CATEGORIES,
   emptyCommandForm,
+  getAllCategories,
   getCategoryLabel,
+  loadCustomCategories,
   parseParameters,
+  saveCustomCategories,
+  slugifyCategory,
 } from '../../types/commandbook';
 import type {
   CommandDetail,
   CommandInput,
   CommandSummary,
+  CustomCategory,
 } from '../../types/commandbook';
 import { useAuth } from '../../auth/AuthContext';
 
@@ -162,8 +167,14 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
       [isSearchControlled, onSearchKeywordChange],
     );
 
-    // --- 列表状态 ---
-    const [selectedCategory, setSelectedCategory] = useState<string>('');  // 空字符串 = 全部
+    // --- 自定义分类状态(存 localStorage) ---
+  const [customCategories, setCustomCategories] = useState<CustomCategory[]>(() => loadCustomCategories());
+  const [isAddingCategory, setIsAddingCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const allCategories = useMemo(() => getAllCategories(customCategories), [customCategories]);
+
+  // --- 列表状态 ---
+  const [selectedCategory, setSelectedCategory] = useState<string>('');  // 空字符串 = 全部
   const [commands, setCommands] = useState<CommandSummary[]>([]);
   const [allCommands, setAllCommands] = useState<CommandSummary[]>([]);
   const [isLoadingList, setIsLoadingList] = useState(true);
@@ -253,6 +264,20 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
     setSelectedSummary(null);
     setSelectedDetail(null);
     setDrawerError(null);
+  }
+
+  // 添加自定义分类:同名/同 slug 视为重复,直接关闭输入框
+  function handleAddCategory() {
+    const label = newCategoryName.trim();
+    if (!label) return;
+    const value = slugifyCategory(label);
+    if (!allCategories.some((item) => item.value === value || item.label === label)) {
+      const next = [...customCategories, { value, label }];
+      setCustomCategories(next);
+      saveCustomCategories(next);
+    }
+    setIsAddingCategory(false);
+    setNewCategoryName('');
   }
 
   // 打开命令详情(只读模式)
@@ -496,9 +521,40 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
       <div className={hideHeader ? 'h-full grid grid-cols-1 lg:grid-cols-[160px_340px_1fr] gap-4 p-6' : 'flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[160px_340px_1fr] gap-4 p-6'}>
         {/* 左侧:分类树 */}
         <aside className="hidden lg:flex flex-col rounded-2xl border border-gray-200 bg-white overflow-hidden">
-          <div className="px-4 py-3 border-b border-gray-100 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-            分类
+          <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+              分类
+            </span>
+            <button
+              type="button"
+              onClick={() => { setIsAddingCategory((v) => !v); setNewCategoryName(''); }}
+              title="添加分类"
+              className="rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-indigo-600"
+            >
+              <Plus size={14} />
+            </button>
           </div>
+          {isAddingCategory && (
+            <form
+              onSubmit={(e) => { e.preventDefault(); handleAddCategory(); }}
+              className="px-2 pt-2 flex items-center gap-1"
+            >
+              <input
+                autoFocus
+                type="text"
+                value={newCategoryName}
+                onChange={(e) => setNewCategoryName(e.target.value)}
+                placeholder="分类名称"
+                className="flex-1 min-w-0 rounded-lg border border-gray-300 px-2 py-1 text-xs focus:border-indigo-500 focus:outline-none"
+              />
+              <button type="submit" title="确认" className="rounded p-1 text-indigo-600 hover:bg-indigo-50">
+                <Check size={14} />
+              </button>
+              <button type="button" onClick={() => setIsAddingCategory(false)} title="取消" className="rounded p-1 text-gray-400 hover:bg-gray-100">
+                <X size={14} />
+              </button>
+            </form>
+          )}
           <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-0.5">
             {/* 全部分类 */}
             <CategoryItem
@@ -507,8 +563,8 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
               active={selectedCategory === ''}
               onClick={() => handleSelectCategory('')}
             />
-            {/* 各固定分类 */}
-            {COMMAND_CATEGORIES.map((item) => (
+            {/* 固定分类 + 自定义分类 */}
+            {allCategories.map((item) => (
               <CategoryItem
                 key={item.value}
                 label={item.label}
@@ -665,6 +721,7 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
                   isParsing={isParsing}
                   aiError={aiError}
                   onParseAI={handleParseAI}
+                  categories={allCategories}
                 />
               )}
             </div>
@@ -975,6 +1032,7 @@ function CommandForm(props: {
   isParsing: boolean;
   aiError: string | null;
   onParseAI: () => void;
+  categories: Array<{ value: string; label: string }>;
 }) {
   const {
     values,
@@ -988,6 +1046,7 @@ function CommandForm(props: {
     isParsing,
     aiError,
     onParseAI,
+    categories,
   } = props;
 
   function updateField<K extends keyof CommandInput>(key: K, value: CommandInput[K]) {
@@ -1046,7 +1105,7 @@ function CommandForm(props: {
             className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             required
           >
-            {COMMAND_CATEGORIES.map((item) => (
+            {categories.map((item) => (
               <option key={item.value} value={item.value}>{item.label}</option>
             ))}
           </select>

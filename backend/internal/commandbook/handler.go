@@ -17,15 +17,13 @@ import (
 // commandPathPrefix 单条命令的路由前缀
 const commandPathPrefix = "/api/v1/commands/"
 
-// 有效分类集合(后端做白名单校验,前端固定列表)
-var validCategories = map[string]bool{
-	"linux":  true,
-	"python": true,
-	"java":   true,
-	"git":    true,
-	"docker": true,
-	"sql":    true,
-	"other":  true,
+// isValidCategory 校验分类格式:非空、长度不超过 40、不含空白字符。
+// 前端提供固定分类 + 用户自定义分类,后端只做格式校验,不再维护白名单。
+func isValidCategory(category string) bool {
+	if category == "" || len(category) > 40 {
+		return false
+	}
+	return !strings.ContainsAny(category, " \t\r\n")
 }
 
 // Handler 命令手册 HTTP 处理器
@@ -140,7 +138,7 @@ func (handler *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
 	category := strings.TrimSpace(r.URL.Query().Get("category"))
 	keyword := strings.TrimSpace(r.URL.Query().Get("q"))
 
-	if category != "" && !validCategories[category] {
+	if category != "" && !isValidCategory(category) {
 		writeError(w, http.StatusBadRequest, "invalid category")
 		return
 	}
@@ -204,7 +202,7 @@ func (handler *Handler) CreateCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !validCategories[request.Category] {
+	if !isValidCategory(request.Category) {
 		writeError(w, http.StatusBadRequest, "invalid category")
 		return
 	}
@@ -285,7 +283,7 @@ func (handler *Handler) UpdateCommand(w http.ResponseWriter, r *http.Request, co
 		return
 	}
 
-	if !validCategories[request.Category] {
+	if !isValidCategory(request.Category) {
 		writeError(w, http.StatusBadRequest, "invalid category")
 		return
 	}

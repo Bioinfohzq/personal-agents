@@ -166,7 +166,7 @@ func (handler *Handler) ParseAI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	category := strings.TrimSpace(req.Category)
-	if category != "" && !validCategories[category] {
+	if category != "" && !isValidCategory(category) {
 		writeError(w, http.StatusBadRequest, "invalid category")
 		return
 	}
@@ -283,7 +283,7 @@ func (handler *Handler) parseWithLLM(ctx context.Context, rawText string, catego
 
 	// 如果 LLM 没返回 category,默认用用户选择的 category,否则 other
 	if result.Category == "" {
-		if validCategories[category] {
+		if isValidCategory(category) {
 			result.Category = category
 		} else {
 			result.Category = "other"

@@ -4,6 +4,7 @@ import { Navigate } from 'react-router-dom';
 import { useSearchParams } from 'react-router-dom';
 import {
   BookOpen,
+  Check,
   Copy,
   ExternalLink,
   Loader2,
@@ -29,17 +30,21 @@ import {
 import { isUnauthorizedError } from '../../api/http';
 import {
   emptyKnowledgeForm,
+  getAllCategories,
   getCategoryLabel as getKnowledgeCategoryLabel,
   getRiskColor,
   getRiskLabel,
+  loadCustomCategories,
   parseExtra,
   parseKeySpecs,
   parseTags,
+  saveCustomCategories,
+  slugifyCategory,
   stringifyExtra,
-  KNOWLEDGE_CATEGORIES,
 } from '../../types/knowledgebook';
 import type {
   AlgorithmExtra,
+  CustomCategory,
   HardwareExtra,
   KnowledgeCategory,
   KnowledgeDetail,
@@ -97,6 +102,12 @@ export function KnowledgebookPage() {
       setCommandSearchKeyword('');
     }
   }
+
+  // --- 自定义分类状态(存 localStorage) ---
+  const [customCategories, setCustomCategories] = useState<CustomCategory[]>(() => loadCustomCategories());
+  const [isAddingCategory, setIsAddingCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const allCategories = useMemo(() => getAllCategories(customCategories), [customCategories]);
 
   // --- 列表状态 ---
   const [selectedCategory, setSelectedCategory] = useState<string>('');
@@ -185,6 +196,20 @@ export function KnowledgebookPage() {
     setSelectedDetail(null);
     setDrawerError(null);
     void loadItems(category, searchKeyword);
+  }
+
+  // 添加自定义分类:同名/同 slug 视为重复,直接关闭输入框
+  function handleAddCategory() {
+    const label = newCategoryName.trim();
+    if (!label) return;
+    const value = slugifyCategory(label);
+    if (!allCategories.some((item) => item.value === value || item.label === label)) {
+      const next = [...customCategories, { value, label }];
+      setCustomCategories(next);
+      saveCustomCategories(next);
+    }
+    setIsAddingCategory(false);
+    setNewCategoryName('');
   }
 
   async function openItemDetail(summary: KnowledgeSummary) {
@@ -463,9 +488,40 @@ export function KnowledgebookPage() {
           <div className="h-full grid grid-cols-1 lg:grid-cols-[180px_340px_1fr] gap-4">
         {/* 左侧:分类树 */}
         <aside className="hidden lg:flex flex-col rounded-2xl border border-gray-200 bg-white overflow-hidden">
-          <div className="px-4 py-3 border-b border-gray-100 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-            分类
+          <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+              分类
+            </span>
+            <button
+              type="button"
+              onClick={() => { setIsAddingCategory((v) => !v); setNewCategoryName(''); }}
+              title="添加分类"
+              className="rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-indigo-600"
+            >
+              <Plus size={14} />
+            </button>
           </div>
+          {isAddingCategory && (
+            <form
+              onSubmit={(e) => { e.preventDefault(); handleAddCategory(); }}
+              className="px-2 pt-2 flex items-center gap-1"
+            >
+              <input
+                autoFocus
+                type="text"
+                value={newCategoryName}
+                onChange={(e) => setNewCategoryName(e.target.value)}
+                placeholder="分类名称"
+                className="flex-1 min-w-0 rounded-lg border border-gray-300 px-2 py-1 text-xs focus:border-indigo-500 focus:outline-none"
+              />
+              <button type="submit" title="确认" className="rounded p-1 text-indigo-600 hover:bg-indigo-50">
+                <Check size={14} />
+              </button>
+              <button type="button" onClick={() => setIsAddingCategory(false)} title="取消" className="rounded p-1 text-gray-400 hover:bg-gray-100">
+                <X size={14} />
+              </button>
+            </form>
+          )}
           <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-0.5">
             <CategoryItem
               label="全部"
@@ -473,7 +529,7 @@ export function KnowledgebookPage() {
               active={selectedCategory === ''}
               onClick={() => handleSelectCategory('')}
             />
-            {KNOWLEDGE_CATEGORIES.map((item) => (
+            {allCategories.map((item) => (
               <CategoryItem
                 key={item.value}
                 label={item.label}
@@ -637,6 +693,7 @@ export function KnowledgebookPage() {
                     isParsing={isParsing}
                     aiError={aiError}
                     onParseAI={handleParseAI}
+                    categories={allCategories}
                   />
                 )}
               </div>
@@ -1006,6 +1063,7 @@ function KnowledgeForm(props: {
   isParsing: boolean;
   aiError: string | null;
   onParseAI: () => void;
+  categories: Array<{ value: string; label: string }>;
 }) {
   const {
     values,
@@ -1019,6 +1077,7 @@ function KnowledgeForm(props: {
     isParsing,
     aiError,
     onParseAI,
+    categories,
   } = props;
 
   function updateField<K extends keyof KnowledgeInput>(key: K, value: KnowledgeInput[K]) {
@@ -1087,7 +1146,7 @@ function KnowledgeForm(props: {
             className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             required
           >
-            {KNOWLEDGE_CATEGORIES.map((item) => (
+            {categories.map((item) => (
               <option key={item.value} value={item.value}>{item.label}</option>
             ))}
           </select>

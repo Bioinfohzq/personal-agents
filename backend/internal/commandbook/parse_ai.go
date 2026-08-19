@@ -111,7 +111,7 @@ func (handler *Handler) ParseAI(w http.ResponseWriter, r *http.Request) {
 
 	// 如果用户传了 category,以用户选择为准
 	if req.Category != "" {
-		if _, ok := validCategories[req.Category]; ok {
+		if isValidCategory(req.Category) {
 			result.Category = req.Category
 		}
 	}

@@ -9,7 +9,49 @@ export const COMMAND_CATEGORIES = [
   { value: 'other', label: '其他' },
 ] as const;
 
-export type CommandCategory = (typeof COMMAND_CATEGORIES)[number]['value'];
+export type CommandCategory = string;
+
+// 自定义分类(用户通过"添加分类"创建)的 localStorage key
+const CUSTOM_CATEGORIES_KEY = 'commandbook.custom-categories';
+
+export interface CustomCategory {
+  value: string;
+  label: string;
+}
+
+// 读取用户自定义分类列表
+export function loadCustomCategories(): CustomCategory[] {
+  try {
+    const raw = localStorage.getItem(CUSTOM_CATEGORIES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as CustomCategory[];
+    return Array.isArray(parsed) ? parsed.filter((item) => item && item.value && item.label) : [];
+  } catch {
+    return [];
+  }
+}
+
+// 保存用户自定义分类列表
+export function saveCustomCategories(list: CustomCategory[]): void {
+  try {
+    localStorage.setItem(CUSTOM_CATEGORIES_KEY, JSON.stringify(list));
+  } catch {
+    // localStorage 不可用时静默忽略
+  }
+}
+
+// 将用户输入的分类名转换为存储用的 slug(如 "前端" → "custom-前端")
+export function slugifyCategory(label: string): string {
+  const trimmed = label.trim();
+  if (!trimmed) return '';
+  if (/^[a-z0-9]+(-[a-z0-9]+)*$/.test(trimmed)) return trimmed;
+  return `custom-${trimmed}`;
+}
+
+// 固定分类 + 自定义分类合并后的完整列表
+export function getAllCategories(custom: CustomCategory[]): Array<{ value: string; label: string }> {
+  return [...COMMAND_CATEGORIES.map((item) => ({ value: item.value as string, label: item.label })), ...custom];
+}
 
 // 命令摘要(列表用,不含 introduction / parameters / notes 正文)
 export interface CommandSummary {
