@@ -7,6 +7,11 @@ import { InputArea } from '../components/Chat/InputArea';
 import type { MainLayoutContext } from '../layouts/MainLayout';
 
 /**
+ * 停止按钮 abort 控制：流式请求期间持有 controller,停止时 abort()
+ * 用于中止 LangGraph 流式响应,让用户能主动结束等待
+ */
+
+/**
  * ChatPage:聊天页面
  *
  * 职责:管理单个聊天会话的消息列表和输入交互
@@ -42,8 +47,15 @@ export function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
 
+  // 流式输出状态:控制输入框停止按钮和消息骨架屏
+  // 与 isLoading 区分:加载历史消息时不应显示停止按钮
+  const [isStreaming, setIsStreaming] = useState(false);
+
   // 消息列表底部引用,用于自动滚动到底部
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // 流式请求 abort controller:停止按钮通过它中止当前请求
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // 滚动到底部
   const scrollToBottom = () => {
@@ -82,8 +94,14 @@ export function ChatPage() {
       } else {
         setMessages(formattedMessages);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to load thread state:', err);
+      // thread 被 LangGraph 服务端清理(如 dev 模式重启导致内存状态丢失),
+      // 自动回退到 /chat,让 initThread 创建新会话
+      if (err?.status === 404 || err?.message?.includes('404')) {
+        navigate('/chat', { replace: true });
+        return;
+      }
       setMessages([{
         id: Date.now().toString(),
         role: 'agent',
@@ -135,6 +153,8 @@ export function ChatPage() {
 
   /**
    * 发送消息:校验 → 乐观更新 → 流式调用智能体 → 实时渲染响应 → 异常兜底
+   *
+   * 支持中止:通过 abortControllerRef 持有 AbortController,停止按钮可调 handleStop 中止流式请求
    */
   const handleSend = async () => {
     if (!input.trim() || !threadId) return;
@@ -155,10 +175,14 @@ export function ChatPage() {
     ]);
 
     setInput('');
-    setIsLoading(true);
+    setIsStreaming(true);
+
+    // 创建本次请求的 AbortController,供停止按钮中止使用
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     try {
-      // 流式调用 LangGraph 智能体
+      // 流式调用 LangGraph 智能体(传入 signal 支持中止)
       const streamResponse = client.runs.stream(
         threadId,
         'lead_agent',
@@ -167,6 +191,7 @@ export function ChatPage() {
             messages: [{ role: 'user', content: userMessage.content }]
           },
           streamMode: 'messages',
+          signal: controller.signal,
         }
       );
 
@@ -174,6 +199,9 @@ export function ChatPage() {
 
       // 消费流式响应:逐块读取并更新占位消息
       for await (const chunk of streamResponse) {
+        // 用户已点停止:提前退出循环
+        if (controller.signal.aborted) break;
+
         const c = chunk as any;
 
         if (c.event === 'messages/partial') {
@@ -193,6 +221,19 @@ export function ChatPage() {
         }
       }
 
+      // 用户主动中止:保留已生成的内容,补一句"已停止"提示
+      if (controller.signal.aborted) {
+        setMessages(prev =>
+          prev.map(m => m.id === agentMessageId
+            ? { ...m, content: finalContent || '（已停止生成）' }
+            : m
+          )
+        );
+        // 刷新侧边栏(中止后消息已写入 thread state)
+        await fetchThreads();
+        return;
+      }
+
       // 空响应兜底
       if (!finalContent) {
         setMessages(prev =>
@@ -203,14 +244,40 @@ export function ChatPage() {
       // 刷新侧边栏会话列表
       await fetchThreads();
 
-    } catch (error) {
+    } catch (error: any) {
+      // AbortError 是用户主动停止,不算异常
+      if (error?.name === 'AbortError') {
+        console.log('流式请求已被用户中止');
+        return;
+      }
+      // thread 在发送过程中被服务端清理(如 dev 模式重启),自动回退创建新会话
+      if (error?.status === 404 || error?.message?.includes('404')) {
+        console.warn('当前会话已失效,自动创建新会话');
+        navigate('/chat', { replace: true });
+        setMessages(prev =>
+          prev.map(m => m.id === agentMessageId ? { ...m, content: '当前会话已失效,已为您创建新会话,请重新发送。' } : m)
+        );
+        return;
+      }
       console.error('发送消息失败:', error);
       setMessages(prev =>
         prev.map(m => m.id === agentMessageId ? { ...m, content: '抱歉，服务似乎出现了一些问题，请稍后再试。' } : m)
       );
     } finally {
-      setIsLoading(false);
+      // 清理 controller 引用,避免泄漏
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+      setIsStreaming(false);
     }
+  };
+
+  /**
+   * 停止生成:中止当前流式请求
+   * 由 InputArea 的停止按钮调用
+   */
+  const handleStop = () => {
+    abortControllerRef.current?.abort();
   };
 
   /**
@@ -227,14 +294,15 @@ export function ChatPage() {
     <>
       <MessageList
         messages={messages}
-        isLoading={isLoading}
+        isLoading={isStreaming}
         messagesEndRef={messagesEndRef}
       />
       <InputArea
         input={input}
-        isLoading={isLoading}
+        isLoading={isStreaming}
         onInputChange={setInput}
         onSend={handleSend}
+        onStop={handleStop}
         onKeyDown={handleKeyDown}
       />
     </>

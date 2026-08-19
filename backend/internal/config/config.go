@@ -3,10 +3,14 @@
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -37,9 +41,7 @@ type AuthConfig struct {
 }
 
 type LLMConfig struct {
-	DefaultModel   string
-	MoonshotAPIKey string
-	DeepseekAPIKey string
+	DefaultModel string
 }
 
 func (cfg AuthConfig) TokenTTL() time.Duration {
@@ -52,6 +54,10 @@ func (cfg AuthConfig) TokenTTL() time.Duration {
 }
 
 func Load() Config {
+	// 加载项目根目录的 .env 文件,让后端不再依赖 pa-start 脚本的 source .env。
+	// 查找顺序:从可执行文件当前工作目录向上查找,最多 5 层。
+	loadRootEnv()
+
 	fileConfig := loadLocalYAML()
 	databaseConfig := DatabaseConfig{
 		Driver:    getEnv("DATABASE_DRIVER", valueOrDefault(fileConfig.Database.Driver, "mysql")),
@@ -76,9 +82,7 @@ func Load() Config {
 			TokenTTLMinutes: getEnv("AUTH_TOKEN_TTL_MINUTES", valueOrDefault(fileConfig.Auth.TokenTTLMinutes, "10080")),
 		},
 		LLM: LLMConfig{
-			DefaultModel:   getEnv("DEFAULT_MODEL", fileConfig.LLM.DefaultModel),
-			MoonshotAPIKey: getEnv("MOONSHOT_API_KEY", fileConfig.LLM.MoonshotAPIKey),
-			DeepseekAPIKey: getEnv("DEEPSEEK_API_KEY", fileConfig.LLM.DeepseekAPIKey),
+			DefaultModel: getEnv("DEFAULT_MODEL", fileConfig.LLM.DefaultModel),
 		},
 	}
 }
@@ -94,6 +98,50 @@ func getEnv(key string, fallback string) string {
 	}
 
 	return value
+}
+
+// loadRootEnv 查找并加载项目根目录的 .env 文件。
+// 后端通常在 backend/ 目录运行,所以 .env 在父目录。
+// 使用 godotenv.Overload 已经加载过的变量不覆盖,这里只负责首次加载。
+func loadRootEnv() {
+	candidates := []string{}
+
+	// 1. API_CONFIG_FILE 显式指定(也可以指向 .env)
+	if cfg := os.Getenv("API_CONFIG_FILE"); cfg != "" {
+		candidates = append(candidates, cfg)
+	}
+
+	// 2. 从当前工作目录向上查找 .env (最多 5 层)
+	if cwd, err := os.Getwd(); err == nil {
+		dir := cwd
+		for i := 0; i < 5; i++ {
+			candidates = append(candidates, filepath.Join(dir, ".env"))
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
+	}
+
+	// 3. 兜底:backend/../.env
+	candidates = append(candidates, "../.env", "../../.env")
+
+	for _, p := range candidates {
+		if p == "" {
+			continue
+		}
+		if _, err := os.Stat(p); err != nil {
+			continue
+		}
+		if err := godotenv.Load(p); err != nil {
+			// 不打印 err 详情,避免 .env 内容(可能含敏感 key)泄漏到日志
+			slog.Warn("failed to load .env, please check format (each line must be KEY=VALUE or #comment)", "path", p)
+			continue
+		}
+		slog.Info("loaded .env", "path", p)
+		return
+	}
 }
 
 func valueOrDefault(value string, fallback string) string {
@@ -207,10 +255,6 @@ func assignYAMLValue(cfg *Config, section string, key string, value string) {
 		switch key {
 		case "default_model":
 			cfg.LLM.DefaultModel = value
-		case "moonshot_api_key":
-			cfg.LLM.MoonshotAPIKey = value
-		case "deepseek_api_key":
-			cfg.LLM.DeepseekAPIKey = value
 		}
 	}
 }

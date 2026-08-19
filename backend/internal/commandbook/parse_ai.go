@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"personal-agents/backend/internal/config"
 	"strings"
 	"time"
 )
@@ -120,18 +121,15 @@ func (handler *Handler) ParseAI(w http.ResponseWriter, r *http.Request) {
 }
 
 func (handler *Handler) parseWithLLM(ctx context.Context, rawText string) (*ParseAIResponse, error) {
-	provider, apiKey, model, err := handler.resolveLLM()
+	resolved, err := config.ResolveLLM(handler.llm)
 	if err != nil {
 		return nil, err
 	}
 
-	endpoint := "https://api.moonshot.cn/v1/chat/completions"
-	if provider == "deepseek" {
-		endpoint = "https://api.deepseek.com/chat/completions"
-	}
+	endpoint := resolved.ChatEndpoint()
 
 	payload := chatRequest{
-		Model: model,
+		Model: resolved.Model,
 		Messages: []chatMessage{
 			{Role: "system", Content: parseAIPrompt},
 			{Role: "user", Content: rawText},
@@ -150,7 +148,7 @@ func (handler *Handler) parseWithLLM(ctx context.Context, rawText string) (*Pars
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Authorization", "Bearer "+resolved.APIKey)
 
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
@@ -199,62 +197,4 @@ func (handler *Handler) parseWithLLM(ctx context.Context, rawText string) (*Pars
 	result.ReferenceURL = strings.TrimSpace(result.ReferenceURL)
 
 	return &result, nil
-}
-
-func (handler *Handler) resolveLLM() (provider string, apiKey string, model string, err error) {
-	model = strings.ToLower(strings.TrimSpace(handler.llm.DefaultModel))
-
-	switch {
-	case strings.Contains(model, "kimi") || strings.Contains(model, "moonshot"):
-		if handler.llm.MoonshotAPIKey == "" {
-			return "", "", "", errors.New("moonshot api key not configured")
-		}
-		return "moonshot", handler.llm.MoonshotAPIKey, mapMoonshotModel(model), nil
-
-	case strings.Contains(model, "deepseek"):
-		if handler.llm.DeepseekAPIKey == "" {
-			return "", "", "", errors.New("deepseek api key not configured")
-		}
-		return "deepseek", handler.llm.DeepseekAPIKey, "deepseek-chat", nil
-
-	default:
-		if handler.llm.MoonshotAPIKey != "" {
-			return "moonshot", handler.llm.MoonshotAPIKey, "kimi-k2-5-latest", nil
-		}
-		if handler.llm.DeepseekAPIKey != "" {
-			return "deepseek", handler.llm.DeepseekAPIKey, "deepseek-chat", nil
-		}
-		return "", "", "", errors.New("no llm api key configured")
-	}
-}
-
-func mapMoonshotModel(model string) string {
-	if model == "" {
-		return "kimi-k2-5-latest"
-	}
-
-	switch model {
-	case "kimi-k2.5":
-		return "kimi-k2-5-latest"
-	case "kimi-k2.6":
-		return "kimi-k2-6-latest"
-	case "kimi-k2.7-code":
-		return "kimi-k2-7-code-latest"
-	case "kimi-k2.7-code-highspeed":
-		return "kimi-k2-7-code-high-speed-latest"
-	case "moonshot-v1-8k":
-		return "moonshot-v1-8k"
-	case "moonshot-v1-32k":
-		return "moonshot-v1-32k"
-	case "moonshot-v1-128k":
-		return "moonshot-v1-128k"
-	case "moonshot-v1-8k-vision-preview":
-		return "moonshot-v1-8k-vision-preview"
-	case "moonshot-v1-32k-vision-preview":
-		return "moonshot-v1-32k-vision-preview"
-	case "moonshot-v1-128k-vision-preview":
-		return "moonshot-v1-128k-vision-preview"
-	default:
-		return model
-	}
 }

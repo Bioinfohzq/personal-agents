@@ -49,8 +49,12 @@ export function slugifyCategory(label: string): string {
 }
 
 // 固定分类 + 自定义分类合并后的完整列表
+// "其他"始终排在最下面
 export function getAllCategories(custom: CustomCategory[]): Array<{ value: string; label: string }> {
-  return [...COMMAND_CATEGORIES.map((item) => ({ value: item.value as string, label: item.label })), ...custom];
+  const fixed = COMMAND_CATEGORIES.map((item) => ({ value: item.value as string, label: item.label }));
+  const others = fixed.filter((item) => item.value === 'other');
+  const nonOthers = fixed.filter((item) => item.value !== 'other');
+  return [...nonOthers, ...custom, ...others];
 }
 
 // 命令摘要(列表用,不含 introduction / parameters / notes 正文)
