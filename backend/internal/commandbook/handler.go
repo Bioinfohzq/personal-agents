@@ -1,6 +1,7 @@
 package commandbook
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"personal-agents/backend/internal/category"
 	"personal-agents/backend/internal/config"
 	"personal-agents/backend/internal/database"
 	"personal-agents/backend/internal/middleware"
@@ -40,8 +42,9 @@ type ProcedureStep struct {
 
 // Handler 命令手册 HTTP 处理器
 type Handler struct {
-	store *database.Store
-	llm   config.LLMConfig
+	store         *database.Store
+	categoryStore *category.Store
+	llm           config.LLMConfig
 }
 
 // CommandRequest 创建/更新命令请求体
@@ -53,7 +56,7 @@ type Handler struct {
 type CommandRequest struct {
 	Title        string          `json:"title"`
 	CommandText  string          `json:"command_text"`
-	Category     string          `json:"category"`
+	CategoryID   int64           `json:"category_id"`
 	SubCategory  string          `json:"sub_category"`
 	Introduction string          `json:"introduction"`
 	Parameters   string          `json:"parameters"`
@@ -69,7 +72,9 @@ type CommandSummary struct {
 	ID           int64     `json:"id"`
 	Title        string    `json:"title"`
 	CommandText  string    `json:"command_text"`
+	CategoryID   int64     `json:"category_id"`
 	Category     string    `json:"category"`
+	CategorySlug string    `json:"category_slug"`
 	SubCategory  string    `json:"sub_category,omitempty"`
 	TemplateType string    `json:"template_type"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -92,7 +97,9 @@ type commandRecord struct {
 	ID           int64
 	Title        string
 	CommandText  string
-	Category     string
+	CategoryID   int64
+	CategoryName string
+	CategorySlug string
 	SubCategory  sql.NullString
 	Introduction sql.NullString
 	Parameters   sql.NullString
@@ -107,7 +114,7 @@ type commandRecord struct {
 
 // NewHandler 创建命令手册处理器
 func NewHandler(store *database.Store, llm config.LLMConfig) *Handler {
-	return &Handler{store: store, llm: llm}
+	return &Handler{store: store, categoryStore: category.NewStore(store), llm: llm}
 }
 
 // Commands 处理 /api/v1/commands 路由(GET 列表 / POST 创建)
@@ -145,8 +152,8 @@ func (handler *Handler) Command(w http.ResponseWriter, r *http.Request) {
 // ListCommands 查询当前用户的命令列表
 // 支持可选 query 参数:
 //
-//	?category=linux    按分类过滤
-//	?q=grep            关键词搜索(title / command_text / introduction / parameters / notes)
+//	?category_id=1    按分类 ID 过滤
+//	?q=grep           关键词搜索(title / command_text / introduction / parameters / notes)
 func (handler *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
 	userID, ok := currentUserID(r)
 	if !ok {
@@ -154,26 +161,34 @@ func (handler *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	category := strings.TrimSpace(r.URL.Query().Get("category"))
+	categoryIDStr := strings.TrimSpace(r.URL.Query().Get("category_id"))
 	keyword := strings.TrimSpace(r.URL.Query().Get("q"))
 
-	if category != "" && !isValidCategory(category) {
-		writeError(w, http.StatusBadRequest, "invalid category")
-		return
+	var categoryID int64
+	var filterByCategory bool
+	if categoryIDStr != "" {
+		id, err := strconv.ParseInt(categoryIDStr, 10, 64)
+		if err != nil || id <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid category_id")
+			return
+		}
+		categoryID = id
+		filterByCategory = true
 	}
 
 	likePattern := "%" + keyword + "%"
 
 	rows, err := handler.store.DB().QueryContext(
 		r.Context(),
-		`SELECT id, title, command_text, category, sub_category, template_type, created_at, updated_at
-		 FROM commands
-		 WHERE user_id = ?
-		   AND (? = '' OR category = ?)
-		   AND (? = '' OR title LIKE ? OR command_text LIKE ? OR introduction LIKE ? OR parameters LIKE ? OR notes LIKE ?)
-		 ORDER BY updated_at DESC`,
+		`SELECT c.id, c.title, c.command_text, c.category_id, cat.name, cat.slug, c.sub_category, c.template_type, c.created_at, c.updated_at
+		 FROM commands c
+		 JOIN categories cat ON cat.id = c.category_id
+		 WHERE c.user_id = ?
+		   AND (? = FALSE OR c.category_id = ?)
+		   AND (? = '' OR c.title LIKE ? OR c.command_text LIKE ? OR c.introduction LIKE ? OR c.parameters LIKE ? OR c.notes LIKE ?)
+		 ORDER BY c.updated_at DESC`,
 		userID,
-		category, category,
+		filterByCategory, categoryID,
 		keyword, likePattern, likePattern, likePattern, likePattern, likePattern,
 	)
 	if err != nil {
@@ -185,7 +200,7 @@ func (handler *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
 	commands := make([]CommandSummary, 0)
 	for rows.Next() {
 		var record commandRecord
-		if err := rows.Scan(&record.ID, &record.Title, &record.CommandText, &record.Category, &record.SubCategory, &record.TemplateType, &record.CreatedAt, &record.UpdatedAt); err != nil {
+		if err := rows.Scan(&record.ID, &record.Title, &record.CommandText, &record.CategoryID, &record.CategoryName, &record.CategorySlug, &record.SubCategory, &record.TemplateType, &record.CreatedAt, &record.UpdatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read command")
 			return
 		}
@@ -223,8 +238,8 @@ func (handler *Handler) CreateCommand(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid template_type")
 		return
 	}
-	if request.Title == "" || request.Category == "" {
-		writeError(w, http.StatusBadRequest, "title and category are required")
+	if request.Title == "" || request.CategoryID <= 0 {
+		writeError(w, http.StatusBadRequest, "title and category_id are required")
 		return
 	}
 	if request.TemplateType == "article" && request.CommandText == "" {
@@ -236,8 +251,8 @@ func (handler *Handler) CreateCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !isValidCategory(request.Category) {
-		writeError(w, http.StatusBadRequest, "invalid category")
+	if err := handler.validateCategoryID(r.Context(), userID, request.CategoryID); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid category_id")
 		return
 	}
 
@@ -249,12 +264,12 @@ func (handler *Handler) CreateCommand(w http.ResponseWriter, r *http.Request) {
 
 	result, err := handler.store.DB().ExecContext(
 		r.Context(),
-		`INSERT INTO commands (user_id, title, command_text, category, sub_category, introduction, parameters, scenarios, notes, reference_url, template_type, steps)
+		`INSERT INTO commands (user_id, title, command_text, category_id, sub_category, introduction, parameters, scenarios, notes, reference_url, template_type, steps)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		userID,
 		request.Title,
 		request.CommandText,
-		request.Category,
+		request.CategoryID,
 		nullableString(request.SubCategory),
 		nullableString(request.Introduction),
 		nullableString(request.Parameters),
@@ -327,8 +342,8 @@ func (handler *Handler) UpdateCommand(w http.ResponseWriter, r *http.Request, co
 		writeError(w, http.StatusBadRequest, "invalid template_type")
 		return
 	}
-	if request.Title == "" || request.Category == "" {
-		writeError(w, http.StatusBadRequest, "title and category are required")
+	if request.Title == "" || request.CategoryID <= 0 {
+		writeError(w, http.StatusBadRequest, "title and category_id are required")
 		return
 	}
 	if request.TemplateType == "article" && request.CommandText == "" {
@@ -340,8 +355,8 @@ func (handler *Handler) UpdateCommand(w http.ResponseWriter, r *http.Request, co
 		return
 	}
 
-	if !isValidCategory(request.Category) {
-		writeError(w, http.StatusBadRequest, "invalid category")
+	if err := handler.validateCategoryID(r.Context(), userID, request.CategoryID); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid category_id")
 		return
 	}
 
@@ -354,11 +369,11 @@ func (handler *Handler) UpdateCommand(w http.ResponseWriter, r *http.Request, co
 	result, err := handler.store.DB().ExecContext(
 		r.Context(),
 		`UPDATE commands
-		 SET title = ?, command_text = ?, category = ?, sub_category = ?, introduction = ?, parameters = ?, scenarios = ?, notes = ?, reference_url = ?, template_type = ?, steps = ?
+		 SET title = ?, command_text = ?, category_id = ?, sub_category = ?, introduction = ?, parameters = ?, scenarios = ?, notes = ?, reference_url = ?, template_type = ?, steps = ?
 		 WHERE id = ? AND user_id = ?`,
 		request.Title,
 		request.CommandText,
-		request.Category,
+		request.CategoryID,
 		nullableString(request.SubCategory),
 		nullableString(request.Introduction),
 		nullableString(request.Parameters),
@@ -433,75 +448,21 @@ func (handler *Handler) DeleteCommand(w http.ResponseWriter, r *http.Request, co
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// MoveCategoryRequest 批量迁移分类请求体
-type MoveCategoryRequest struct {
-	OldCategory string `json:"old_category"`
-	NewCategory string `json:"new_category"`
-}
-
-// MoveCategory 将当前用户某分类下的所有命令批量迁移到另一分类
-// 用于删除自定义分类时,将其下命令移动到"其他"等默认分类
-func (handler *Handler) MoveCategory(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	userID, ok := currentUserID(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
-	}
-
-	var request MoveCategoryRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
-	}
-	request.OldCategory = strings.TrimSpace(request.OldCategory)
-	request.NewCategory = strings.TrimSpace(request.NewCategory)
-
-	if request.OldCategory == "" || request.NewCategory == "" {
-		writeError(w, http.StatusBadRequest, "old_category and new_category are required")
-		return
-	}
-	if !isValidCategory(request.OldCategory) || !isValidCategory(request.NewCategory) {
-		writeError(w, http.StatusBadRequest, "invalid category")
-		return
-	}
-
-	_, err := handler.store.DB().ExecContext(
-		r.Context(),
-		`UPDATE commands
-		 SET category = ?, updated_at = ?
-		 WHERE user_id = ? AND category = ?`,
-		request.NewCategory,
-		time.Now(),
-		userID,
-		request.OldCategory,
-	)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to move commands category")
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
 // findCommandDetail 查询单条命令详情(含 introduction / parameters / notes / steps)
 func (handler *Handler) findCommandDetail(r *http.Request, userID int64, commandID int64) (CommandDetail, error) {
 	var record commandRecord
 	row := handler.store.DB().QueryRowContext(
 		r.Context(),
-		`SELECT id, title, command_text, category, sub_category, introduction, parameters, scenarios, notes, reference_url, template_type, steps, created_at, updated_at
-		 FROM commands
-		 WHERE id = ? AND user_id = ?
+		`SELECT c.id, c.title, c.command_text, c.category_id, cat.name, cat.slug, c.sub_category, c.introduction, c.parameters, c.scenarios, c.notes, c.reference_url, c.template_type, c.steps, c.created_at, c.updated_at
+		 FROM commands c
+		 JOIN categories cat ON cat.id = c.category_id
+		 WHERE c.id = ? AND c.user_id = ?
 		 LIMIT 1`,
 		commandID,
 		userID,
 	)
 
-	if err := row.Scan(&record.ID, &record.Title, &record.CommandText, &record.Category, &record.SubCategory, &record.Introduction, &record.Parameters, &record.Scenarios, &record.Notes, &record.ReferenceURL, &record.TemplateType, &record.Steps, &record.CreatedAt, &record.UpdatedAt); err != nil {
+	if err := row.Scan(&record.ID, &record.Title, &record.CommandText, &record.CategoryID, &record.CategoryName, &record.CategorySlug, &record.SubCategory, &record.Introduction, &record.Parameters, &record.Scenarios, &record.Notes, &record.ReferenceURL, &record.TemplateType, &record.Steps, &record.CreatedAt, &record.UpdatedAt); err != nil {
 		return CommandDetail{}, err
 	}
 
@@ -524,7 +485,6 @@ func (handler *Handler) commandExists(r *http.Request, userID int64, commandID i
 func (request *CommandRequest) normalize() {
 	request.Title = strings.TrimSpace(request.Title)
 	request.CommandText = strings.TrimSpace(request.CommandText)
-	request.Category = strings.TrimSpace(request.Category)
 	request.SubCategory = strings.TrimSpace(request.SubCategory)
 	request.Introduction = strings.TrimSpace(request.Introduction)
 	request.Parameters = strings.TrimSpace(request.Parameters)
@@ -557,7 +517,9 @@ func (record commandRecord) summary() CommandSummary {
 		ID:           record.ID,
 		Title:        record.Title,
 		CommandText:  record.CommandText,
-		Category:     record.Category,
+		CategoryID:   record.CategoryID,
+		Category:     record.CategoryName,
+		CategorySlug: record.CategorySlug,
 		SubCategory:  nullStringValue(record.SubCategory),
 		TemplateType: record.TemplateType,
 		CreatedAt:    record.CreatedAt,
@@ -596,6 +558,24 @@ func commandIDFromPath(path string) (int64, bool) {
 // currentUserID 从请求上下文获取当前用户 ID(由 JWT 中间件注入)
 func currentUserID(r *http.Request) (int64, bool) {
 	return middleware.CurrentUserID(r)
+}
+
+// validateCategoryID 校验分类 ID 属于当前用户且为命令手册分类
+func (handler *Handler) validateCategoryID(ctx context.Context, userID int64, categoryID int64) error {
+	cat, err := handler.categoryStore.GetByID(ctx, categoryID)
+	if err != nil {
+		return err
+	}
+	if cat == nil {
+		return errors.New("category not found")
+	}
+	if cat.Scope != category.ScopeCommand {
+		return errors.New("invalid category scope")
+	}
+	if cat.UserID == nil || *cat.UserID != userID {
+		return errors.New("category not owned by user")
+	}
+	return nil
 }
 
 // nullableString 将字符串转为 sql.NullString(空字符串 → NULL)

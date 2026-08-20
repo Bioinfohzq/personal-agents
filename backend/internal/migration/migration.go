@@ -1,4 +1,4 @@
-﻿package migration
+package migration
 
 import (
 	"context"
@@ -83,16 +83,91 @@ func applyFile(ctx context.Context, db *sql.DB, path string) error {
 		return err
 	}
 
-	for _, statement := range strings.Split(string(content), ";") {
-		statement = strings.TrimSpace(statement)
-		if statement == "" {
+	// 如果包含 DELIMITER 指令,按 DELIMITER 分割执行(支持存储过程)
+	sqlContent := string(content)
+	if strings.Contains(sqlContent, "DELIMITER") {
+		return applyWithDelimiter(ctx, db, sqlContent)
+	}
+
+	// 普通模式:清理注释行后按分号分割
+	lines := strings.Split(sqlContent, "\n")
+	var cleaned strings.Builder
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "--") || trimmed == "" {
 			continue
 		}
+		cleaned.WriteString(line)
+		cleaned.WriteString("\n")
+	}
 
-		if _, err := db.ExecContext(ctx, statement); err != nil {
-			return err
+	for _, stmt := range strings.Split(cleaned.String(), ";") {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("executing: %s\nerror: %w", truncate(stmt, 200), err)
 		}
 	}
 
 	return nil
+}
+
+// applyWithDelimiter 解析 DELIMITER 指令执行 SQL(支持存储过程)
+func applyWithDelimiter(ctx context.Context, db *sql.DB, content string) error {
+	// 按行处理,追踪当前 delimiter
+	delimiter := ";"
+	var currentStmt strings.Builder
+
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+
+		// 跳过注释行
+		if strings.HasPrefix(trimmed, "--") || trimmed == "" {
+			continue
+		}
+
+		// 处理 DELIMITER 指令
+		if strings.HasPrefix(strings.ToUpper(trimmed), "DELIMITER ") {
+			parts := strings.Fields(trimmed)
+			if len(parts) >= 2 {
+				delimiter = parts[1]
+			}
+			continue
+		}
+
+		currentStmt.WriteString(line)
+		currentStmt.WriteString("\n")
+
+		// 检查当前行是否以 delimiter 结尾
+		if strings.HasSuffix(trimmed, delimiter) {
+			stmt := strings.TrimSpace(currentStmt.String())
+			stmt = strings.TrimSuffix(stmt, delimiter)
+			stmt = strings.TrimSpace(stmt)
+			if stmt != "" {
+				if _, err := db.ExecContext(ctx, stmt); err != nil {
+					return fmt.Errorf("executing: %s\nerror: %w", truncate(stmt, 200), err)
+				}
+			}
+			currentStmt.Reset()
+		}
+	}
+
+	// 执行最后一条语句(如果没有 delimiter 结尾)
+	remaining := strings.TrimSpace(currentStmt.String())
+	if remaining != "" {
+		if _, err := db.ExecContext(ctx, remaining); err != nil {
+			return fmt.Errorf("executing: %s\nerror: %w", truncate(remaining, 200), err)
+		}
+	}
+
+	return nil
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

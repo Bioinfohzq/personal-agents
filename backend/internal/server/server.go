@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"personal-agents/backend/internal/auth"
+	"personal-agents/backend/internal/category"
 	"personal-agents/backend/internal/commandbook"
 	"personal-agents/backend/internal/config"
 	"personal-agents/backend/internal/database"
@@ -33,6 +34,7 @@ func (server *Server) Handler() http.Handler {
 	authHandler := auth.NewHandler(server.store, server.cfg.Auth)
 	passwordbookHandler := passwordbook.NewHandler(server.store, server.cfg.Auth.JWTSecret)
 	scheduleHandler := schedule.NewHandler(server.store)
+	categoryHandler := category.NewHandler(server.store)
 	commandbookHandler := commandbook.NewHandler(server.store, server.cfg.LLM)
 	knowledgebookHandler := knowledgebook.NewHandler(server.store, server.cfg.LLM)
 	userHandler := user.NewHandler()
@@ -47,18 +49,19 @@ func (server *Server) Handler() http.Handler {
 	// 日程管理:需要 JWT 鉴权,支持按 ?start=&end= 过滤时间范围
 	mux.Handle("/api/v1/schedules", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(scheduleHandler.Schedules)))
 	mux.Handle("/api/v1/schedules/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(scheduleHandler.Schedule)))
-	// 命令手册:记录各类命令及个人理解,支持 ?category=&q= 过滤搜索
+	// 命令手册:记录各类命令及个人理解,支持 ?category_id=&q= 过滤搜索
 	mux.Handle("/api/v1/commands", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(commandbookHandler.Commands)))
-	mux.Handle("/api/v1/commands/category", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(commandbookHandler.MoveCategory)))
 	mux.Handle("/api/v1/commands/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(commandbookHandler.Command)))
 	// 命令手册:AI 智能解析 AI 解释文本并预填命令字段
 	mux.Handle("/api/v1/commands/parse-ai", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(commandbookHandler.ParseAI)))
-	// 知识库:记录结构化知识点,支持 ?category=&q= 过滤搜索
+	// 知识库:记录结构化知识点,支持 ?category_id=&q= 过滤搜索
 	mux.Handle("/api/v1/knowledge", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(knowledgebookHandler.KnowledgeItems)))
-	mux.Handle("/api/v1/knowledge/category", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(knowledgebookHandler.MoveCategory)))
 	mux.Handle("/api/v1/knowledge/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(knowledgebookHandler.KnowledgeItem)))
 	// 知识库:AI 智能解析 AI 解释文本并预填知识字段
 	mux.Handle("/api/v1/knowledge/parse-ai", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(knowledgebookHandler.ParseAI)))
+	// 分类管理:支持知识库/命令手册的分类增删改查和重命名
+	mux.Handle("/api/v1/categories", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(categoryHandler.Categories)))
+	mux.Handle("/api/v1/categories/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(categoryHandler.Category)))
 
 	// 文件系统管理:目录扫描/存储分析/权限查看,仅 macOS/Linux 可用
 	filesystemHandler := filesystem.NewHandler()

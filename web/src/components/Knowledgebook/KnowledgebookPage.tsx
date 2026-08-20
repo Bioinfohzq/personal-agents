@@ -23,32 +23,30 @@ import {
   deleteKnowledgeItem,
   getKnowledgeItem,
   listKnowledgeItems,
-  moveKnowledgeItemsCategory,
   parseKnowledgeAI,
   updateKnowledgeItem,
 } from '../../api/knowledgebook';
+import {
+  createCategory,
+  deleteCategory,
+  listCategories,
+  renameCategory,
+} from '../../api/category';
 
 import { isUnauthorizedError } from '../../api/http';
 import {
   emptyKnowledgeForm,
-  getAllCategories,
-  getCategoryLabel as getKnowledgeCategoryLabel,
   getRiskColor,
   getRiskLabel,
   getTemplateTypeLabel,
-  loadCustomCategories,
   parseExtra,
   parseKeySpecs,
   parseTags,
-  saveCustomCategories,
-  slugifyCategory,
   stringifyExtra,
 } from '../../types/knowledgebook';
 import type {
   AlgorithmExtra,
-  CustomCategory,
   HardwareExtra,
-  KnowledgeCategory,
   KnowledgeDetail,
   KnowledgeExtra,
   KnowledgeInput,
@@ -58,6 +56,8 @@ import type {
   TemplateType,
   UrlResourceExtra,
 } from '../../types/knowledgebook';
+import type { Category } from '../../types/category';
+import { sortCategories } from '../../types/category';
 
 import { useAuth } from '../../auth/AuthContext';
 
@@ -107,14 +107,16 @@ export function KnowledgebookPage() {
     }
   }
 
-  // --- 自定义分类状态(存 localStorage) ---
-  const [customCategories, setCustomCategories] = useState<CustomCategory[]>(() => loadCustomCategories());
+  // --- 分类状态(从后端加载,支持增删改查) ---
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [isLoadingCategories, setIsLoadingCategories] = useState(false);
   const [isAddingCategory, setIsAddingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
-  const allCategories = useMemo(() => getAllCategories(customCategories), [customCategories]);
+  const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
+  const [editingCategoryName, setEditingCategoryName] = useState('');
 
   // --- 列表状态 ---
-  const [selectedCategory, setSelectedCategory] = useState<string>('');
+  const [selectedCategoryId, setSelectedCategoryId] = useState<number>(0);
   const [searchKeyword, setSearchKeyword] = useState('');
   const [items, setItems] = useState<KnowledgeSummary[]>([]);
   const [allItems, setAllItems] = useState<KnowledgeSummary[]>([]);
@@ -145,9 +147,9 @@ export function KnowledgebookPage() {
       clearTimeout(debounceTimerRef.current);
     }
     debounceTimerRef.current = setTimeout(() => {
-      void loadItems(selectedCategory, value);
+      void loadItems(selectedCategoryId, value);
     }, 300);
-  }, [selectedCategory]);
+  }, [selectedCategoryId]);
 
   useEffect(() => {
     return () => {
@@ -166,11 +168,23 @@ export function KnowledgebookPage() {
     setter(apiError instanceof Error ? apiError.message : fallback);
   }, [onSessionExpired]);
 
-  const loadItems = useCallback(async (category: string, q: string) => {
+  const loadCategories = useCallback(async () => {
+    setIsLoadingCategories(true);
+    try {
+      const data = await listCategories(token, 'knowledge');
+      setCategories(sortCategories(data));
+    } catch (err) {
+      handleApiError(err, '加载分类列表失败', setListError);
+    } finally {
+      setIsLoadingCategories(false);
+    }
+  }, [token, handleApiError]);
+
+  const loadItems = useCallback(async (categoryId: number, q: string) => {
     setIsLoadingList(true);
     setListError(null);
     try {
-      const data = await listKnowledgeItems(token, category || undefined, q || undefined);
+      const data = await listKnowledgeItems(token, categoryId || undefined, q || undefined);
       setItems(data);
     } catch (loadError) {
       handleApiError(loadError, '加载知识库列表失败', setListError);
@@ -189,31 +203,73 @@ export function KnowledgebookPage() {
   }, [token, handleApiError]);
 
   useEffect(() => {
-    void loadItems('', '');
+    void loadCategories();
+    void loadItems(0, '');
     void loadCategoryCounts();
-  }, [loadItems, loadCategoryCounts]);
+  }, [loadCategories, loadItems, loadCategoryCounts]);
 
-  function handleSelectCategory(category: string) {
-    setSelectedCategory(category);
+  function handleSelectCategory(categoryId: number) {
+    setSelectedCategoryId(categoryId);
     setDrawerMode(null);
     setSelectedSummary(null);
     setSelectedDetail(null);
     setDrawerError(null);
-    void loadItems(category, searchKeyword);
+    void loadItems(categoryId, searchKeyword);
   }
 
-  // 添加自定义分类:同名/同 slug 视为重复,直接关闭输入框
-  function handleAddCategory() {
-    const label = newCategoryName.trim();
-    if (!label) return;
-    const value = slugifyCategory(label);
-    if (!allCategories.some((item) => item.value === value || item.label === label)) {
-      const next = [...customCategories, { value, label }];
-      setCustomCategories(next);
-      saveCustomCategories(next);
+  // 添加自定义分类:同名视为重复
+  async function handleAddCategory() {
+    const name = newCategoryName.trim();
+    if (!name) return;
+    if (categories.some((item) => item.name === name)) {
+      setIsAddingCategory(false);
+      setNewCategoryName('');
+      return;
+    }
+    try {
+      await createCategory(token, { scope: 'knowledge', name });
+      await loadCategories();
+    } catch (err) {
+      handleApiError(err, '创建分类失败', setListError);
     }
     setIsAddingCategory(false);
     setNewCategoryName('');
+  }
+
+  async function handleRenameCategory(category: Category) {
+    const name = editingCategoryName.trim();
+    if (!name) {
+      setEditingCategoryId(null);
+      return;
+    }
+    try {
+      await renameCategory(token, category.id, { name });
+      await loadCategories();
+      await loadItems(selectedCategoryId, searchKeyword);
+      await loadCategoryCounts();
+    } catch (err) {
+      handleApiError(err, '重命名分类失败', setListError);
+    }
+    setEditingCategoryId(null);
+    setEditingCategoryName('');
+  }
+
+  async function handleRenameCategoryDirect(category: Category, newName: string) {
+    const name = newName.trim();
+    if (!name || name === category.name) return;
+    try {
+      await renameCategory(token, category.id, { name });
+      await loadCategories();
+      await loadItems(selectedCategoryId, searchKeyword);
+      await loadCategoryCounts();
+    } catch (err) {
+      handleApiError(err, '重命名分类失败', setListError);
+    }
+  }
+
+  function startRenameCategory(category: Category) {
+    setEditingCategoryId(category.id);
+    setEditingCategoryName(category.name);
   }
 
   async function openItemDetail(summary: KnowledgeSummary) {
@@ -233,10 +289,14 @@ export function KnowledgebookPage() {
     }
   }
 
+  const defaultCategoryId = useMemo(() => {
+    return categories.find((c) => c.slug === 'system-path')?.id ?? (categories[0]?.id || 0);
+  }, [categories]);
+
   function openCreateForm() {
     setSelectedSummary(null);
     setSelectedDetail(null);
-    setFormValues({ ...emptyKnowledgeForm, category: (selectedCategory as KnowledgeCategory) || 'system-path' });
+    setFormValues({ ...emptyKnowledgeForm, category_id: selectedCategoryId || defaultCategoryId });
     setDrawerError(null);
     resetAIState();
     setDrawerMode('create');
@@ -246,7 +306,7 @@ export function KnowledgebookPage() {
     if (!selectedDetail) return;
     setFormValues({
       title: selectedDetail.title,
-      category: selectedDetail.category,
+      category_id: selectedDetail.category_id,
       sub_category: selectedDetail.sub_category ?? '',
       tags: selectedDetail.tags ?? '',
       summary: selectedDetail.summary ?? '',
@@ -289,14 +349,14 @@ export function KnowledgebookPage() {
     try {
       const result = await parseKnowledgeAI(token, {
         raw_text: rawText,
-        category: formValues.category,
+        category_id: formValues.category_id,
         template_type: formValues.template_type,
       });
 
       setFormValues((prev) => ({
         ...prev,
         title: result.title || prev.title,
-        category: result.category || prev.category,
+        category_id: result.category_id || prev.category_id,
         sub_category: result.sub_category || prev.sub_category,
         tags: result.tags || prev.tags,
         summary: result.summary || prev.summary,
@@ -318,7 +378,7 @@ export function KnowledgebookPage() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!formValues.title.trim() || !formValues.category) {
+    if (!formValues.title.trim() || !formValues.category_id) {
       setDrawerError('标题和分类都是必填项');
       return;
     }
@@ -336,7 +396,7 @@ export function KnowledgebookPage() {
 
     const payload: KnowledgeInput = {
       title: formValues.title.trim(),
-      category: formValues.category,
+      category_id: formValues.category_id,
       sub_category: formValues.sub_category.trim(),
       tags: formValues.tags.trim(),
       summary: formValues.summary.trim(),
@@ -352,12 +412,12 @@ export function KnowledgebookPage() {
       if (drawerMode === 'create') {
         await createKnowledgeItem(token, payload);
         closeDrawer();
-        await loadItems(selectedCategory, searchKeyword);
+        await loadItems(selectedCategoryId, searchKeyword);
         await loadCategoryCounts();
       } else if (drawerMode === 'edit' && selectedSummary) {
         const updated = await updateKnowledgeItem(token, selectedSummary.id, payload);
         setSelectedDetail(updated);
-        await loadItems(selectedCategory, searchKeyword);
+        await loadItems(selectedCategoryId, searchKeyword);
         await loadCategoryCounts();
         setDrawerMode('view');
       }
@@ -398,7 +458,7 @@ export function KnowledgebookPage() {
 
     try {
       await deleteKnowledgeItem(token, item.id);
-      await loadItems(selectedCategory, searchKeyword);
+      await loadItems(selectedCategoryId, searchKeyword);
       await loadCategoryCounts();
       if (selectedSummary?.id === item.id) {
         closeDrawer();
@@ -408,29 +468,25 @@ export function KnowledgebookPage() {
     }
   }
 
-  // 删除自定义分类:将其下知识条目移动到"其他"
-  async function handleDeleteCategory(category: CustomCategory, event: React.MouseEvent) {
+  // 删除自定义分类:将其下知识条目移动到"其他"(后端事务处理)
+  async function handleDeleteCategory(category: Category, event: React.MouseEvent) {
     event.stopPropagation();
-    const count = categoryCounts.get(category.value) ?? 0;
+    const count = categoryCounts.get(category.id) ?? 0;
     const confirmed = window.confirm(
-      `确定删除分类「${category.label}」吗？该分类下的 ${count} 条知识将移动到「其他」分类。`,
+      `确定删除分类「${category.name}」吗？该分类下的 ${count} 条知识将移动到「其他」分类。`,
     );
     if (!confirmed) return;
 
     try {
-      if (count > 0) {
-        await moveKnowledgeItemsCategory(token, category.value, 'other');
-      }
-      const next = customCategories.filter((item) => item.value !== category.value);
-      setCustomCategories(next);
-      saveCustomCategories(next);
-      if (selectedCategory === category.value) {
-        setSelectedCategory('');
+      await deleteCategory(token, category.id);
+      if (selectedCategoryId === category.id) {
+        setSelectedCategoryId(0);
         setDrawerMode(null);
         setSelectedSummary(null);
         setSelectedDetail(null);
       }
-      await loadItems(selectedCategory === category.value ? '' : selectedCategory, searchKeyword);
+      await loadCategories();
+      await loadItems(selectedCategoryId === category.id ? 0 : selectedCategoryId, searchKeyword);
       await loadCategoryCounts();
     } catch (deleteError) {
       handleApiError(deleteError, '删除分类失败', setListError);
@@ -462,12 +518,24 @@ export function KnowledgebookPage() {
   }
 
   const categoryCounts = useMemo(() => {
-    const map = new Map<string, number>();
+    const map = new Map<number, number>();
     for (const item of allItems) {
-      map.set(item.category, (map.get(item.category) ?? 0) + 1);
+      map.set(item.category_id, (map.get(item.category_id) ?? 0) + 1);
     }
     return map;
   }, [allItems]);
+
+  const categoryMap = useMemo(() => {
+    const map = new Map<number, Category>();
+    for (const category of categories) {
+      map.set(category.id, category);
+    }
+    return map;
+  }, [categories]);
+
+  const selectedCategoryName = useMemo(() => {
+    return categoryMap.get(selectedCategoryId)?.name ?? '全部知识';
+  }, [categoryMap, selectedCategoryId]);
 
   return (
     <>
@@ -592,17 +660,18 @@ export function KnowledgebookPage() {
             <CategoryItem
               label="全部"
               count={allItems.length}
-              active={selectedCategory === ''}
-              onClick={() => handleSelectCategory('')}
+              active={selectedCategoryId === 0}
+              onClick={() => handleSelectCategory(0)}
             />
-            {allCategories.map((item) => (
+            {categories.map((item) => (
               <CategoryItem
-                key={item.value}
-                label={item.label}
-                count={categoryCounts.get(item.value) ?? 0}
-                active={selectedCategory === item.value}
-                deletable={customCategories.some((custom) => custom.value === item.value)}
-                onClick={() => handleSelectCategory(item.value)}
+                key={item.id}
+                category={item}
+                count={categoryCounts.get(item.id) ?? 0}
+                active={selectedCategoryId === item.id}
+                deletable={true}
+                onClick={() => handleSelectCategory(item.id)}
+                onRenameConfirm={(newName) => void handleRenameCategoryDirect(item, newName)}
                 onDelete={(event) => void handleDeleteCategory(item, event)}
               />
             ))}
@@ -613,7 +682,7 @@ export function KnowledgebookPage() {
         <section className="min-h-0 rounded-2xl border border-gray-200 bg-white overflow-hidden flex flex-col">
           <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-gray-800">
-              {selectedCategory ? getKnowledgeCategoryLabel(selectedCategory) : '全部知识'}
+              {selectedCategoryId ? selectedCategoryName : '全部知识'}
               <span className="ml-2 text-xs text-gray-500">{items.length} 项</span>
             </h2>
           </div>
@@ -677,7 +746,7 @@ export function KnowledgebookPage() {
                         >
                           {getTemplateTypeLabel(item.template_type)}
                         </span>
-                        <KnowledgeCategoryBadge value={item.category} />
+                        <KnowledgeCategoryBadge category={categoryMap.get(item.category_id)} />
                       </div>
                     </div>
                     {item.summary && (
@@ -788,7 +857,7 @@ export function KnowledgebookPage() {
                     isParsing={isParsing}
                     aiError={aiError}
                     onParseAI={handleParseAI}
-                    categories={allCategories}
+                    categories={categories}
                   />
                 )}
               </div>
@@ -812,54 +881,165 @@ export function KnowledgebookPage() {
 // --- 子组件 ---
 
 function CategoryItem(props: {
-  label: string;
+  label?: string;
+  category?: Category;
   count: number;
   active: boolean;
   deletable?: boolean;
   onClick: () => void;
+  onRenameConfirm?: (newName: string) => void;
   onDelete?: (event: React.MouseEvent) => void;
 }) {
+  const label = props.category ? props.category.name : (props.label ?? '');
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState(label);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // 编辑时自动聚焦
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
+
+  // 点击外部关闭菜单或取消编辑
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      const target = e.target as HTMLElement;
+      if (contextMenu && menuRef.current && !menuRef.current.contains(target)) {
+        setContextMenu(null);
+      }
+      // 编辑模式：只在点击真正的外部区域时取消，排除提交按钮
+      if (isEditing && inputRef.current) {
+        const isSubmitButton = target.closest('button[type="submit"]');
+        const isInsideInput = inputRef.current.contains(target);
+        if (!isInsideInput && !isSubmitButton) {
+          setIsEditing(false);
+          setEditName(label);
+        }
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [contextMenu, isEditing, label]);
+
+  // ESC 键取消编辑
+  useEffect(() => {
+    if (!isEditing) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setIsEditing(false);
+        setEditName(label);
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isEditing, label]);
+
+  function handleContextMenu(e: React.MouseEvent) {
+    if (props.onRenameConfirm || props.onDelete) {
+      e.preventDefault();
+      setContextMenu({ x: e.clientX, y: e.clientY });
+    }
+  }
+
+  function handleStartRename() {
+    setContextMenu(null);
+    setEditName(label);
+    setIsEditing(true);
+  }
+
+  function handleConfirmRename() {
+    const name = editName.trim();
+    if (name && name !== label) {
+      props.onRenameConfirm?.(name);
+    }
+    setIsEditing(false);
+  }
+
+  // 编辑模式
+  if (isEditing) {
+    return (
+      <form
+        onSubmit={(e) => { e.preventDefault(); handleConfirmRename(); }}
+        className="flex items-center gap-1 rounded-lg px-2 py-1.5 bg-indigo-50"
+      >
+        <input
+          ref={inputRef}
+          type="text"
+          value={editName}
+          onChange={(e) => setEditName(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          className="flex-1 min-w-0 rounded border border-indigo-300 px-2 py-1 text-xs focus:border-indigo-500 focus:outline-none"
+        />
+        <button type="submit" title="确认" className="rounded p-1 text-indigo-600 hover:bg-indigo-100">
+          <Check size={12} />
+        </button>
+      </form>
+    );
+  }
+
   return (
-    <button
-      type="button"
-      onClick={props.onClick}
-      className={`group w-full flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors ${
-        props.active
-          ? 'bg-indigo-50 text-indigo-700 font-medium'
-          : 'text-gray-700 hover:bg-gray-50'
-      }`}
-    >
-      <span>{props.label}</span>
-      <span className="flex items-center gap-1.5">
-        <span className={`text-xs ${props.active ? 'text-indigo-500' : 'text-gray-400'}`}>
-          {props.count}
-        </span>
-        {props.deletable && props.onDelete && (
-          <span
-            role="button"
-            tabIndex={0}
-            onClick={props.onDelete}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                props.onDelete?.(event as unknown as React.MouseEvent);
-              }
-            }}
-            title="删除分类"
-            className="opacity-0 group-hover:opacity-100 focus:opacity-100 rounded p-0.5 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-opacity"
-          >
-            <Trash2 size={14} />
+    <>
+      <button
+        type="button"
+        onClick={props.onClick}
+        onContextMenu={handleContextMenu}
+        className={`group w-full flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors ${
+          props.active
+            ? 'bg-indigo-50 text-indigo-700 font-medium'
+            : 'text-gray-700 hover:bg-gray-50'
+        }`}
+      >
+        <span className="truncate">{label}</span>
+        <span className="flex items-center gap-1.5">
+          <span className={`text-xs ${props.active ? 'text-indigo-500' : 'text-gray-400'}`}>
+            {props.count}
           </span>
-        )}
-      </span>
-    </button>
+        </span>
+      </button>
+
+      {/* 右键上下文菜单 */}
+      {contextMenu && (
+        <div
+          ref={menuRef}
+          className="fixed z-50 min-w-[120px] rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          {props.onRenameConfirm && (
+            <button
+              type="button"
+              onClick={handleStartRename}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100"
+            >
+              <Pencil size={14} />
+              重命名
+            </button>
+          )}
+          {props.deletable && props.onDelete && (
+            <button
+              type="button"
+              onClick={() => { setContextMenu(null); props.onDelete?.(undefined as unknown as React.MouseEvent); }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-red-600 hover:bg-red-50"
+            >
+              <Trash2 size={14} />
+              删除分类
+            </button>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 
-function KnowledgeCategoryBadge(props: { value: string }) {
+function KnowledgeCategoryBadge(props: { category?: Category; value?: string }) {
+  const displayName = props.category?.name ?? props.value ?? '其他';
   return (
     <span className="shrink-0 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600">
-      {getKnowledgeCategoryLabel(props.value)}
+      {displayName}
     </span>
   );
 }
@@ -1227,7 +1407,7 @@ function KnowledgeForm(props: {
   isParsing: boolean;
   aiError: string | null;
   onParseAI: () => void;
-  categories: Array<{ value: string; label: string }>;
+  categories: Category[];
 }) {
   const {
     values,
@@ -1243,6 +1423,11 @@ function KnowledgeForm(props: {
     onParseAI,
     categories,
   } = props;
+
+  const selectedCategory = useMemo(
+    () => categories.find((c) => c.id === values.category_id),
+    [categories, values.category_id],
+  );
 
   function updateField<K extends keyof KnowledgeInput>(key: K, value: KnowledgeInput[K]) {
     onChange({ ...values, [key]: value });
@@ -1314,17 +1499,17 @@ function KnowledgeForm(props: {
         <label className="block">
           <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">知识类型</span>
           <select
-            value={values.category}
+            value={values.category_id}
             onChange={(e) => {
-              const newCategory = e.target.value as KnowledgeCategory;
-              updateField('category', newCategory);
+              const newCategoryId = Number(e.target.value);
+              updateField('category_id', newCategoryId);
               updateField('extra', '');
             }}
             className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             required
           >
             {categories.map((item) => (
-              <option key={item.value} value={item.value}>{item.label}</option>
+              <option key={item.id} value={item.id}>{item.name}</option>
             ))}
           </select>
         </label>
@@ -1369,7 +1554,7 @@ function KnowledgeForm(props: {
       {values.template_type === 'article' ? (
         <>
           {/* 类型专属字段 */}
-          <ExtraFieldsEditor category={values.category} extra={values.extra} onChange={updateExtra} />
+          <ExtraFieldsEditor category={selectedCategory} extra={values.extra} onChange={updateExtra} />
 
           {/* 详细介绍 */}
           <label className="block">
@@ -1438,14 +1623,14 @@ function KnowledgeForm(props: {
 }
 
 function ExtraFieldsEditor(props: {
-  category: KnowledgeCategory;
+  category?: Category;
   extra: string;
   onChange: (patch: KnowledgeExtra) => void;
 }) {
   const { category, extra, onChange } = props;
   const value = parseExtra(extra);
 
-  switch (category) {
+  switch (category?.slug) {
     case 'system-path':
       return <SystemPathExtraEditor value={value as SystemPathExtra} onChange={onChange} />;
     case 'url-resource':

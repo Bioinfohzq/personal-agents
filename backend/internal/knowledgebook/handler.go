@@ -1,6 +1,7 @@
 package knowledgebook
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"personal-agents/backend/internal/category"
 	"personal-agents/backend/internal/config"
 	"personal-agents/backend/internal/database"
 	"personal-agents/backend/internal/middleware"
@@ -40,14 +42,15 @@ type ProcedureStep struct {
 
 // Handler 知识库 HTTP 处理器
 type Handler struct {
-	store *database.Store
-	llm   config.LLMConfig
+	store         *database.Store
+	categoryStore *category.Store
+	llm           config.LLMConfig
 }
 
 // KnowledgeRequest 创建/更新知识请求体
 type KnowledgeRequest struct {
 	Title        string          `json:"title"`
-	Category     string          `json:"category"`
+	CategoryID   int64           `json:"category_id"`
 	SubCategory  string          `json:"sub_category"`
 	Tags         string          `json:"tags"`
 	Summary      string          `json:"summary"`
@@ -63,7 +66,9 @@ type KnowledgeRequest struct {
 type KnowledgeSummary struct {
 	ID           int64     `json:"id"`
 	Title        string    `json:"title"`
+	CategoryID   int64     `json:"category_id"`
 	Category     string    `json:"category"`
+	CategorySlug string    `json:"category_slug"`
 	SubCategory  string    `json:"sub_category,omitempty"`
 	Tags         string    `json:"tags,omitempty"`
 	Summary      string    `json:"summary,omitempty"`
@@ -86,7 +91,9 @@ type KnowledgeDetail struct {
 type knowledgeRecord struct {
 	ID           int64
 	Title        string
-	Category     string
+	CategoryID   int64
+	CategoryName string
+	CategorySlug string
 	SubCategory  sql.NullString
 	Tags         sql.NullString
 	Summary      sql.NullString
@@ -102,7 +109,7 @@ type knowledgeRecord struct {
 
 // NewHandler 创建知识库处理器
 func NewHandler(store *database.Store, llm config.LLMConfig) *Handler {
-	return &Handler{store: store, llm: llm}
+	return &Handler{store: store, categoryStore: category.NewStore(store), llm: llm}
 }
 
 // KnowledgeItems 处理 /api/v1/knowledge 路由(GET 列表 / POST 创建)
@@ -140,8 +147,8 @@ func (handler *Handler) KnowledgeItem(w http.ResponseWriter, r *http.Request) {
 // ListKnowledgeItems 查询当前用户的知识列表
 // 支持可选 query 参数:
 //
-//	?category=system-path    按分类过滤
-//	?q=缓存                  关键词搜索(title / content / notes / tags / summary)
+//	?category_id=1    按分类 ID 过滤
+//	?q=缓存           关键词搜索(title / content / notes / tags / summary)
 func (handler *Handler) ListKnowledgeItems(w http.ResponseWriter, r *http.Request) {
 	userID, ok := currentUserID(r)
 	if !ok {
@@ -149,26 +156,34 @@ func (handler *Handler) ListKnowledgeItems(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	category := strings.TrimSpace(r.URL.Query().Get("category"))
+	categoryIDStr := strings.TrimSpace(r.URL.Query().Get("category_id"))
 	keyword := strings.TrimSpace(r.URL.Query().Get("q"))
 
-	if category != "" && !isValidCategory(category) {
-		writeError(w, http.StatusBadRequest, "invalid category")
-		return
+	var categoryID int64
+	var filterByCategory bool
+	if categoryIDStr != "" {
+		id, err := strconv.ParseInt(categoryIDStr, 10, 64)
+		if err != nil || id <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid category_id")
+			return
+		}
+		categoryID = id
+		filterByCategory = true
 	}
 
 	likePattern := "%" + keyword + "%"
 
 	rows, err := handler.store.DB().QueryContext(
 		r.Context(),
-		`SELECT id, title, category, sub_category, tags, summary, template_type, created_at, updated_at
-		 FROM knowledge_items
-		 WHERE user_id = ?
-		   AND (? = '' OR category = ?)
-		   AND (? = '' OR title LIKE ? OR summary LIKE ? OR content LIKE ? OR notes LIKE ? OR tags LIKE ?)
-		 ORDER BY updated_at DESC`,
+		`SELECT ki.id, ki.title, ki.category_id, c.name, c.slug, ki.sub_category, ki.tags, ki.summary, ki.template_type, ki.created_at, ki.updated_at
+		 FROM knowledge_items ki
+		 JOIN categories c ON c.id = ki.category_id
+		 WHERE ki.user_id = ?
+		   AND (? = FALSE OR ki.category_id = ?)
+		   AND (? = '' OR ki.title LIKE ? OR ki.summary LIKE ? OR ki.content LIKE ? OR ki.notes LIKE ? OR ki.tags LIKE ?)
+		 ORDER BY ki.updated_at DESC`,
 		userID,
-		category, category,
+		filterByCategory, categoryID,
 		keyword, likePattern, likePattern, likePattern, likePattern, likePattern,
 	)
 	if err != nil {
@@ -180,7 +195,7 @@ func (handler *Handler) ListKnowledgeItems(w http.ResponseWriter, r *http.Reques
 	items := make([]KnowledgeSummary, 0)
 	for rows.Next() {
 		var record knowledgeRecord
-		if err := rows.Scan(&record.ID, &record.Title, &record.Category, &record.SubCategory, &record.Tags, &record.Summary, &record.TemplateType, &record.CreatedAt, &record.UpdatedAt); err != nil {
+		if err := rows.Scan(&record.ID, &record.Title, &record.CategoryID, &record.CategoryName, &record.CategorySlug, &record.SubCategory, &record.Tags, &record.Summary, &record.TemplateType, &record.CreatedAt, &record.UpdatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read knowledge item")
 			return
 		}
@@ -218,8 +233,8 @@ func (handler *Handler) CreateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid template_type")
 		return
 	}
-	if request.Title == "" || request.Category == "" {
-		writeError(w, http.StatusBadRequest, "title and category are required")
+	if request.Title == "" || request.CategoryID <= 0 {
+		writeError(w, http.StatusBadRequest, "title and category_id are required")
 		return
 	}
 	if request.TemplateType == "article" && request.Content == "" {
@@ -231,8 +246,8 @@ func (handler *Handler) CreateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if !isValidCategory(request.Category) {
-		writeError(w, http.StatusBadRequest, "invalid category")
+	if err := handler.validateCategoryID(r.Context(), userID, request.CategoryID); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid category_id")
 		return
 	}
 
@@ -249,11 +264,11 @@ func (handler *Handler) CreateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 
 	result, err := handler.store.DB().ExecContext(
 		r.Context(),
-		`INSERT INTO knowledge_items (user_id, title, category, sub_category, tags, summary, content, notes, reference_url, extra, template_type, steps)
+		`INSERT INTO knowledge_items (user_id, title, category_id, sub_category, tags, summary, content, notes, reference_url, extra, template_type, steps)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		userID,
 		request.Title,
-		request.Category,
+		request.CategoryID,
 		nullableString(request.SubCategory),
 		nullableString(request.Tags),
 		nullableString(request.Summary),
@@ -327,8 +342,8 @@ func (handler *Handler) UpdateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid template_type")
 		return
 	}
-	if request.Title == "" || request.Category == "" {
-		writeError(w, http.StatusBadRequest, "title and category are required")
+	if request.Title == "" || request.CategoryID <= 0 {
+		writeError(w, http.StatusBadRequest, "title and category_id are required")
 		return
 	}
 	if request.TemplateType == "article" && request.Content == "" {
@@ -340,8 +355,8 @@ func (handler *Handler) UpdateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if !isValidCategory(request.Category) {
-		writeError(w, http.StatusBadRequest, "invalid category")
+	if err := handler.validateCategoryID(r.Context(), userID, request.CategoryID); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid category_id")
 		return
 	}
 
@@ -359,10 +374,10 @@ func (handler *Handler) UpdateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 	result, err := handler.store.DB().ExecContext(
 		r.Context(),
 		`UPDATE knowledge_items
-		 SET title = ?, category = ?, sub_category = ?, tags = ?, summary = ?, content = ?, notes = ?, reference_url = ?, extra = ?, template_type = ?, steps = ?
+		 SET title = ?, category_id = ?, sub_category = ?, tags = ?, summary = ?, content = ?, notes = ?, reference_url = ?, extra = ?, template_type = ?, steps = ?
 		 WHERE id = ? AND user_id = ?`,
 		request.Title,
-		request.Category,
+		request.CategoryID,
 		nullableString(request.SubCategory),
 		nullableString(request.Tags),
 		nullableString(request.Summary),
@@ -438,75 +453,21 @@ func (handler *Handler) DeleteKnowledgeItem(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// MoveCategoryRequest 批量迁移分类请求体
-type MoveCategoryRequest struct {
-	OldCategory string `json:"old_category"`
-	NewCategory string `json:"new_category"`
-}
-
-// MoveCategory 将当前用户某分类下的所有知识条目批量迁移到另一分类
-// 用于删除自定义分类时,将其下条目移动到"其他"等默认分类
-func (handler *Handler) MoveCategory(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	userID, ok := currentUserID(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
-	}
-
-	var request MoveCategoryRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
-	}
-	request.OldCategory = strings.TrimSpace(request.OldCategory)
-	request.NewCategory = strings.TrimSpace(request.NewCategory)
-
-	if request.OldCategory == "" || request.NewCategory == "" {
-		writeError(w, http.StatusBadRequest, "old_category and new_category are required")
-		return
-	}
-	if !isValidCategory(request.OldCategory) || !isValidCategory(request.NewCategory) {
-		writeError(w, http.StatusBadRequest, "invalid category")
-		return
-	}
-
-	_, err := handler.store.DB().ExecContext(
-		r.Context(),
-		`UPDATE knowledge_items
-		 SET category = ?, updated_at = ?
-		 WHERE user_id = ? AND category = ?`,
-		request.NewCategory,
-		time.Now(),
-		userID,
-		request.OldCategory,
-	)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to move knowledge items category")
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
 // findKnowledgeDetail 查询单条知识详情
 func (handler *Handler) findKnowledgeDetail(r *http.Request, userID int64, itemID int64) (KnowledgeDetail, error) {
 	var record knowledgeRecord
 	row := handler.store.DB().QueryRowContext(
 		r.Context(),
-		`SELECT id, title, category, sub_category, tags, summary, content, notes, reference_url, extra, template_type, steps, created_at, updated_at
-		 FROM knowledge_items
-		 WHERE id = ? AND user_id = ?
+		`SELECT ki.id, ki.title, ki.category_id, c.name, c.slug, ki.sub_category, ki.tags, ki.summary, ki.content, ki.notes, ki.reference_url, ki.extra, ki.template_type, ki.steps, ki.created_at, ki.updated_at
+		 FROM knowledge_items ki
+		 JOIN categories c ON c.id = ki.category_id
+		 WHERE ki.id = ? AND ki.user_id = ?
 		 LIMIT 1`,
 		itemID,
 		userID,
 	)
 
-	if err := row.Scan(&record.ID, &record.Title, &record.Category, &record.SubCategory, &record.Tags, &record.Summary, &record.Content, &record.Notes, &record.ReferenceURL, &record.Extra, &record.TemplateType, &record.Steps, &record.CreatedAt, &record.UpdatedAt); err != nil {
+	if err := row.Scan(&record.ID, &record.Title, &record.CategoryID, &record.CategoryName, &record.CategorySlug, &record.SubCategory, &record.Tags, &record.Summary, &record.Content, &record.Notes, &record.ReferenceURL, &record.Extra, &record.TemplateType, &record.Steps, &record.CreatedAt, &record.UpdatedAt); err != nil {
 		return KnowledgeDetail{}, err
 	}
 
@@ -528,7 +489,6 @@ func (handler *Handler) knowledgeExists(r *http.Request, userID int64, itemID in
 // normalize 去除请求字段首尾空白
 func (request *KnowledgeRequest) normalize() {
 	request.Title = strings.TrimSpace(request.Title)
-	request.Category = strings.TrimSpace(request.Category)
 	request.SubCategory = strings.TrimSpace(request.SubCategory)
 	request.Tags = strings.TrimSpace(request.Tags)
 	request.Summary = strings.TrimSpace(request.Summary)
@@ -573,7 +533,9 @@ func (record knowledgeRecord) summary() KnowledgeSummary {
 	return KnowledgeSummary{
 		ID:           record.ID,
 		Title:        record.Title,
-		Category:     record.Category,
+		CategoryID:   record.CategoryID,
+		Category:     record.CategoryName,
+		CategorySlug: record.CategorySlug,
 		SubCategory:  nullStringValue(record.SubCategory),
 		Tags:         nullStringValue(record.Tags),
 		Summary:      nullStringValue(record.Summary),
@@ -613,6 +575,24 @@ func knowledgeIDFromPath(path string) (int64, bool) {
 // currentUserID 从请求上下文获取当前用户 ID
 func currentUserID(r *http.Request) (int64, bool) {
 	return middleware.CurrentUserID(r)
+}
+
+// validateCategoryID 校验分类 ID 属于当前用户且为知识库分类
+func (handler *Handler) validateCategoryID(ctx context.Context, userID int64, categoryID int64) error {
+	cat, err := handler.categoryStore.GetByID(ctx, categoryID)
+	if err != nil {
+		return err
+	}
+	if cat == nil {
+		return errors.New("category not found")
+	}
+	if cat.Scope != category.ScopeKnowledge {
+		return errors.New("invalid category scope")
+	}
+	if cat.UserID == nil || *cat.UserID != userID {
+		return errors.New("category not owned by user")
+	}
+	return nil
 }
 
 // nullableString 将字符串转为 sql.NullString

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"personal-agents/backend/internal/category"
 	"personal-agents/backend/internal/config"
 	"strings"
 	"time"
@@ -17,13 +18,14 @@ import (
 // ParseAIRequest AI 解释文本解析请求
 type ParseAIRequest struct {
 	RawText      string `json:"raw_text"`
-	Category     string `json:"category"`
+	CategoryID   int64  `json:"category_id"`
 	TemplateType string `json:"template_type"`
 }
 
 // ParseAIResponse AI 解析结果
 type ParseAIResponse struct {
 	Title        string          `json:"title"`
+	CategoryID   int64           `json:"category_id"`
 	Category     string          `json:"category"`
 	SubCategory  string          `json:"sub_category"`
 	Tags         string          `json:"tags"`
@@ -205,23 +207,30 @@ func (handler *Handler) ParseAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	category := strings.TrimSpace(req.Category)
-	if category != "" && !isValidCategory(category) {
-		writeError(w, http.StatusBadRequest, "invalid category")
+	if req.CategoryID <= 0 {
+		writeError(w, http.StatusBadRequest, "category_id is required")
 		return
 	}
 
-	result, err := handler.parseWithLLM(r.Context(), req.RawText, category, req.TemplateType)
+	cat, err := handler.categoryStore.GetByID(r.Context(), req.CategoryID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read category")
+		return
+	}
+	if cat == nil || cat.Scope != category.ScopeKnowledge {
+		writeError(w, http.StatusBadRequest, "invalid category_id")
+		return
+	}
+
+	result, err := handler.parseWithLLM(r.Context(), req.RawText, cat.Slug, req.TemplateType)
 	if err != nil {
 		slog.Error("parse knowledge with llm failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "parse failed")
 		return
 	}
 
-	// 如果用户传了 category,以用户选择为准
-	if category != "" {
-		result.Category = category
-	}
+	result.CategoryID = cat.ID
+	result.Category = cat.Name
 
 	writeJSON(w, http.StatusOK, result)
 }

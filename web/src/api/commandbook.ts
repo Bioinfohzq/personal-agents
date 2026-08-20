@@ -8,15 +8,15 @@ import type {
 } from '../types/commandbook';
 
 // listCommands 查询命令列表
-//   可选参数 category: 按分类过滤
+//   可选参数 category_id: 按分类 ID 过滤
 //   可选参数 q: 关键词搜索(title / command_text / description / notes)
 export async function listCommands(
   token: string,
-  category?: string,
+  categoryId?: number,
   q?: string,
 ): Promise<CommandSummary[]> {
   const params = new URLSearchParams();
-  if (category) params.set('category', category);
+  if (categoryId) params.set('category_id', String(categoryId));
   if (q) params.set('q', q);
   const query = params.toString();
   const path = query ? `/api/v1/commands?${query}` : '/api/v1/commands';
@@ -71,20 +71,6 @@ export async function deleteCommand(token: string, commandId: number): Promise<v
     method: 'DELETE',
   });
   await assertBusinessResponse(response, '删除命令失败');
-}
-
-// moveCommandsCategory 批量迁移分类
-// 用于删除自定义分类时,将其下所有命令移动到新的默认分类(如 other)
-export async function moveCommandsCategory(
-  token: string,
-  oldCategory: string,
-  newCategory: string,
-): Promise<void> {
-  const response = await businessFetch(token, '/api/v1/commands/category', {
-    method: 'PUT',
-    body: JSON.stringify({ old_category: oldCategory, new_category: newCategory }),
-  });
-  await assertBusinessResponse(response, '迁移分类失败');
 }
 
 // parseCommandAI 智能解析 AI 解释文本并预填命令字段

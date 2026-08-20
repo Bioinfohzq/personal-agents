@@ -1,16 +1,3 @@
-// 命令分类:与后端 validCategories 白名单一一对应
-export const COMMAND_CATEGORIES = [
-  { value: 'linux', label: 'Linux 命令' },
-  { value: 'python', label: 'Python' },
-  { value: 'java', label: 'Java' },
-  { value: 'git', label: 'Git' },
-  { value: 'docker', label: 'Docker' },
-  { value: 'sql', label: 'SQL' },
-  { value: 'other', label: '其他' },
-] as const;
-
-export type CommandCategory = string;
-
 // 模板类型
 export type TemplateType = 'article' | 'procedure';
 
@@ -26,58 +13,14 @@ export function getTemplateTypeLabel(type: TemplateType): string {
   return type === 'procedure' ? '流程模板' : '单条命令';
 }
 
-// 自定义分类(用户通过"添加分类"创建)的 localStorage key
-const CUSTOM_CATEGORIES_KEY = 'commandbook.custom-categories';
-
-export interface CustomCategory {
-  value: string;
-  label: string;
-}
-
-// 读取用户自定义分类列表
-export function loadCustomCategories(): CustomCategory[] {
-  try {
-    const raw = localStorage.getItem(CUSTOM_CATEGORIES_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as CustomCategory[];
-    return Array.isArray(parsed) ? parsed.filter((item) => item && item.value && item.label) : [];
-  } catch {
-    return [];
-  }
-}
-
-// 保存用户自定义分类列表
-export function saveCustomCategories(list: CustomCategory[]): void {
-  try {
-    localStorage.setItem(CUSTOM_CATEGORIES_KEY, JSON.stringify(list));
-  } catch {
-    // localStorage 不可用时静默忽略
-  }
-}
-
-// 将用户输入的分类名转换为存储用的 slug(如 "前端" → "custom-前端")
-export function slugifyCategory(label: string): string {
-  const trimmed = label.trim();
-  if (!trimmed) return '';
-  if (/^[a-z0-9]+(-[a-z0-9]+)*$/.test(trimmed)) return trimmed;
-  return `custom-${trimmed}`;
-}
-
-// 固定分类 + 自定义分类合并后的完整列表
-// "其他"始终排在最下面
-export function getAllCategories(custom: CustomCategory[]): Array<{ value: string; label: string }> {
-  const fixed = COMMAND_CATEGORIES.map((item) => ({ value: item.value as string, label: item.label }));
-  const others = fixed.filter((item) => item.value === 'other');
-  const nonOthers = fixed.filter((item) => item.value !== 'other');
-  return [...nonOthers, ...custom, ...others];
-}
-
 // 命令摘要(列表用,不含 introduction / parameters / notes 正文)
 export interface CommandSummary {
   id: number;
   title: string;             // 标题(兼一句话含义)
   command_text: string;
+  category_id: number;
   category: string;
+  category_slug: string;
   sub_category?: string;
   template_type: TemplateType;
   created_at: string;
@@ -103,7 +46,7 @@ export interface CommandDetail extends CommandSummary {
 export interface CommandInput {
   title: string;
   command_text: string;
-  category: string;
+  category_id: number;
   sub_category: string;
   introduction: string;
   parameters: string;
@@ -118,7 +61,7 @@ export interface CommandInput {
 export const emptyCommandForm: CommandInput = {
   title: '',
   command_text: '',
-  category: 'linux',
+  category_id: 0,
   sub_category: '',
   introduction: '',
   parameters: '',
@@ -132,7 +75,7 @@ export const emptyCommandForm: CommandInput = {
 // AI 解析请求
 export interface ParseAIRequest {
   raw_text: string;
-  category: string;
+  category_id: number;
   template_type: TemplateType;
 }
 
@@ -140,6 +83,7 @@ export interface ParseAIRequest {
 export interface ParseAIResponse {
   title: string;
   command_text: string;
+  category_id: number;
   category: string;
   sub_category: string;
   introduction: string;
@@ -149,11 +93,6 @@ export interface ParseAIResponse {
   reference_url: string;
   template_type: TemplateType;
   steps: ProcedureStep[];
-}
-
-// 根据分类值获取中文标签
-export function getCategoryLabel(value: string): string {
-  return COMMAND_CATEGORIES.find((item) => item.value === value)?.label ?? value;
 }
 
 // parseParameters 解析参数说明文本为结构化数组

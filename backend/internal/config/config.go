@@ -272,7 +272,7 @@ func buildDatabaseDSN(database DatabaseConfig) string {
 	loc := valueOrDefault(database.Loc, "Local")
 
 	return fmt.Sprintf(
-		"%s:%s@tcp(%s:%s)/%s?parseTime=%s&loc=%s",
+		"%s:%s@tcp(%s:%s)/%s?parseTime=%s&loc=%s&multiStatements=true",
 		database.Username,
 		database.Password,
 		database.Host,

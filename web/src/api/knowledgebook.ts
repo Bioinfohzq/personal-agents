@@ -8,15 +8,15 @@ import type {
 } from '../types/knowledgebook';
 
 // listKnowledgeItems 查询知识库列表
-//   可选参数 category: 按分类过滤
+//   可选参数 category_id: 按分类 ID 过滤
 //   可选参数 q: 关键词搜索(title / summary / content / notes / tags)
 export async function listKnowledgeItems(
   token: string,
-  category?: string,
+  categoryId?: number,
   q?: string,
 ): Promise<KnowledgeSummary[]> {
   const params = new URLSearchParams();
-  if (category) params.set('category', category);
+  if (categoryId) params.set('category_id', String(categoryId));
   if (q) params.set('q', q);
   const query = params.toString();
   const path = query ? `/api/v1/knowledge?${query}` : '/api/v1/knowledge';
@@ -71,20 +71,6 @@ export async function deleteKnowledgeItem(token: string, itemId: number): Promis
     method: 'DELETE',
   });
   await assertBusinessResponse(response, '删除知识失败');
-}
-
-// moveKnowledgeItemsCategory 批量迁移分类
-// 用于删除自定义分类时,将其下所有知识条目移动到新的默认分类(如 other)
-export async function moveKnowledgeItemsCategory(
-  token: string,
-  oldCategory: string,
-  newCategory: string,
-): Promise<void> {
-  const response = await businessFetch(token, '/api/v1/knowledge/category', {
-    method: 'PUT',
-    body: JSON.stringify({ old_category: oldCategory, new_category: newCategory }),
-  });
-  await assertBusinessResponse(response, '迁移分类失败');
 }
 
 // parseKnowledgeAI 智能解析 AI 解释文本并预填知识字段

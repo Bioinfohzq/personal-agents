@@ -26,26 +26,27 @@ import {
   deleteCommand,
   getCommand,
   listCommands,
-  moveCommandsCategory,
   parseCommandAI,
   updateCommand,
 } from '../../api/commandbook';
+import {
+  createCategory,
+  deleteCategory,
+  listCategories,
+  renameCategory,
+} from '../../api/category';
 import { isUnauthorizedError } from '../../api/http';
 import {
   emptyCommandForm,
-  getAllCategories,
-  getCategoryLabel,
   getTemplateTypeLabel,
-  loadCustomCategories,
   parseParameters,
-  saveCustomCategories,
-  slugifyCategory,
 } from '../../types/commandbook';
+import type { Category } from '../../types/category';
+import { sortCategories } from '../../types/category';
 import type {
   CommandDetail,
   CommandInput,
   CommandSummary,
-  CustomCategory,
   ProcedureStep,
   TemplateType,
 } from '../../types/commandbook';
@@ -171,14 +172,16 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
       [isSearchControlled, onSearchKeywordChange],
     );
 
-    // --- 自定义分类状态(存 localStorage) ---
-  const [customCategories, setCustomCategories] = useState<CustomCategory[]>(() => loadCustomCategories());
+    // --- 分类状态(从后端加载,支持增删改查) ---
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [isLoadingCategories, setIsLoadingCategories] = useState(false);
   const [isAddingCategory, setIsAddingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
-  const allCategories = useMemo(() => getAllCategories(customCategories), [customCategories]);
+  const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
+  const [editingCategoryName, setEditingCategoryName] = useState('');
 
   // --- 列表状态 ---
-  const [selectedCategory, setSelectedCategory] = useState<string>('');  // 空字符串 = 全部
+  const [selectedCategoryId, setSelectedCategoryId] = useState<number>(0);  // 0 = 全部
   const [commands, setCommands] = useState<CommandSummary[]>([]);
   const [allCommands, setAllCommands] = useState<CommandSummary[]>([]);
   const [isLoadingList, setIsLoadingList] = useState(true);
@@ -218,11 +221,11 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
   }, [onSessionExpired]);
 
   // 加载命令列表(中间区域,受分类/搜索影响)
-  const loadCommands = useCallback(async (category: string, q: string) => {
+  const loadCommands = useCallback(async (categoryId: number, q: string) => {
     setIsLoadingList(true);
     setListError(null);
     try {
-      const data = await listCommands(token, category || undefined, q || undefined);
+      const data = await listCommands(token, categoryId || undefined, q || undefined);
       setCommands(data);
     } catch (loadError) {
       handleApiError(loadError, '加载命令列表失败', setListError);
@@ -247,41 +250,97 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
       clearTimeout(debounceTimerRef.current);
     }
     debounceTimerRef.current = setTimeout(() => {
-      void loadCommands(selectedCategory, searchKeyword);
+      void loadCommands(selectedCategoryId, searchKeyword);
     }, 300);
     return () => {
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [selectedCategory, searchKeyword, loadCommands]);
+  }, [selectedCategoryId, searchKeyword, loadCommands]);
 
-  // 首次进入加载分类计数
+  // --- API 调用:分类管理 ---
+  const loadCategories = useCallback(async () => {
+    setIsLoadingCategories(true);
+    try {
+      const data = await listCategories(token, 'command');
+      setCategories(sortCategories(data));
+    } catch (err) {
+      handleApiError(err, '加载分类列表失败', setListError);
+    } finally {
+      setIsLoadingCategories(false);
+    }
+  }, [token, handleApiError]);
+
+  // 首次进入加载分类和分类计数
   useEffect(() => {
+    void loadCategories();
     void loadCategoryCounts();
-  }, [loadCategoryCounts]);
+  }, [loadCategories, loadCategoryCounts]);
 
-  // 点分类:切换 category 后关闭右侧抽屉避免显示旧分类的命令
-  function handleSelectCategory(category: string) {
-    setSelectedCategory(category);
+  // 点分类:切换 categoryId 后关闭右侧抽屉避免显示旧分类的命令
+  function handleSelectCategory(categoryId: number) {
+    setSelectedCategoryId(categoryId);
     setDrawerMode(null);
     setSelectedSummary(null);
     setSelectedDetail(null);
     setDrawerError(null);
+    void loadCommands(categoryId, searchKeyword);
   }
 
-  // 添加自定义分类:同名/同 slug 视为重复,直接关闭输入框
-  function handleAddCategory() {
-    const label = newCategoryName.trim();
-    if (!label) return;
-    const value = slugifyCategory(label);
-    if (!allCategories.some((item) => item.value === value || item.label === label)) {
-      const next = [...customCategories, { value, label }];
-      setCustomCategories(next);
-      saveCustomCategories(next);
+  // 添加自定义分类:同名视为重复
+  async function handleAddCategory() {
+    const name = newCategoryName.trim();
+    if (!name) return;
+    if (categories.some((item) => item.name === name)) {
+      setIsAddingCategory(false);
+      setNewCategoryName('');
+      return;
+    }
+    try {
+      await createCategory(token, { scope: 'command', name });
+      await loadCategories();
+    } catch (err) {
+      handleApiError(err, '创建分类失败', setListError);
     }
     setIsAddingCategory(false);
     setNewCategoryName('');
+  }
+
+  async function handleRenameCategory(category: Category) {
+    const name = editingCategoryName.trim();
+    if (!name) {
+      setEditingCategoryId(null);
+      return;
+    }
+    try {
+      await renameCategory(token, category.id, { name });
+      await loadCategories();
+      await loadCommands(selectedCategoryId, searchKeyword);
+      await loadCategoryCounts();
+    } catch (err) {
+      handleApiError(err, '重命名分类失败', setListError);
+    }
+    setEditingCategoryId(null);
+    setEditingCategoryName('');
+  }
+
+  async function handleRenameCategoryDirect(category: Category, newName: string) {
+    const name = newName.trim();
+    if (!name || name === category.name) return;
+    try {
+      await renameCategory(token, category.id, { name });
+      await loadCategories();
+      await loadCommands(selectedCategoryId, searchKeyword);
+      await loadCategoryCounts();
+    } catch (err) {
+      handleApiError(err, '重命名分类失败', setListError);
+    }
+  }
+
+  function startRenameCategory(category: Category) {
+    setEditingCategoryId(category.id);
+    setEditingCategoryName(category.name);
   }
 
   // 打开命令详情(只读模式)
@@ -303,10 +362,14 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
   }
 
   // 打开新建表单(空白)
+  const defaultCategoryId = useMemo(() => {
+    return categories.find((c) => c.slug === 'linux')?.id ?? (categories[0]?.id || 0);
+  }, [categories]);
+
   function openCreateForm() {
     setSelectedSummary(null);
     setSelectedDetail(null);
-    setFormValues({ ...emptyCommandForm, category: selectedCategory || 'linux' });
+    setFormValues({ ...emptyCommandForm, category_id: selectedCategoryId || defaultCategoryId });
     setDrawerError(null);
     resetAIState();
     setDrawerMode('create');
@@ -323,7 +386,7 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
     setFormValues({
       title: selectedDetail.title,
       command_text: selectedDetail.command_text,
-      category: selectedDetail.category,
+      category_id: selectedDetail.category_id,
       sub_category: selectedDetail.sub_category ?? '',
       introduction: selectedDetail.introduction ?? '',
       parameters: selectedDetail.parameters ?? '',
@@ -367,7 +430,7 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
     try {
       const result = await parseCommandAI(token, {
         raw_text: rawText,
-        category: formValues.category,
+        category_id: formValues.category_id,
         template_type: formValues.template_type,
       });
 
@@ -375,7 +438,7 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
         ...prev,
         title: result.title || prev.title,
         command_text: result.command_text || prev.command_text,
-        category: result.category || prev.category,
+        category_id: result.category_id || prev.category_id,
         sub_category: result.sub_category || prev.sub_category,
         introduction: result.introduction || prev.introduction,
         parameters: result.parameters || prev.parameters,
@@ -397,7 +460,7 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!formValues.title.trim() || !formValues.category) {
+    if (!formValues.title.trim() || !formValues.category_id) {
       setDrawerError('标题/含义和分类是必填项');
       return;
     }
@@ -416,7 +479,7 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
     const payload: CommandInput = {
       title: formValues.title.trim(),
       command_text: formValues.command_text.trim(),
-      category: formValues.category,
+      category_id: formValues.category_id,
       sub_category: formValues.sub_category.trim(),
       introduction: formValues.introduction.trim(),
       parameters: formValues.parameters.trim(),
@@ -431,13 +494,13 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
       if (drawerMode === 'create') {
         await createCommand(token, payload);
         closeDrawer();
-        await loadCommands(selectedCategory, searchKeyword);
+        await loadCommands(selectedCategoryId, searchKeyword);
         await loadCategoryCounts();
       } else if (drawerMode === 'edit' && selectedSummary) {
         const updated = await updateCommand(token, selectedSummary.id, payload);
         setSelectedDetail(updated);
         // 刷新当前列表并同步分类计数(命令分类可能变化)
-        await loadCommands(selectedCategory, searchKeyword);
+        await loadCommands(selectedCategoryId, searchKeyword);
         await loadCategoryCounts();
         setDrawerMode('view');
       }
@@ -479,7 +542,7 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
 
     try {
       await deleteCommand(token, cmd.id);
-      await loadCommands(selectedCategory, searchKeyword);
+      await loadCommands(selectedCategoryId, searchKeyword);
       await loadCategoryCounts();
       if (selectedSummary?.id === cmd.id) {
         closeDrawer();
@@ -489,29 +552,25 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
     }
   }
 
-  // 删除自定义分类:将其下命令移动到"其他"
-  async function handleDeleteCategory(category: CustomCategory, event: React.MouseEvent) {
+  // 删除自定义分类:将其下命令移动到"其他"(后端事务处理)
+  async function handleDeleteCategory(category: Category, event: React.MouseEvent) {
     event.stopPropagation();
-    const count = categoryCounts.get(category.value) ?? 0;
+    const count = categoryCounts.get(category.id) ?? 0;
     const confirmed = window.confirm(
-      `确定删除分类「${category.label}」吗？该分类下的 ${count} 条命令将移动到「其他」分类。`,
+      `确定删除分类「${category.name}」吗？该分类下的 ${count} 条命令将移动到「其他」分类。`,
     );
     if (!confirmed) return;
 
     try {
-      if (count > 0) {
-        await moveCommandsCategory(token, category.value, 'other');
-      }
-      const next = customCategories.filter((item) => item.value !== category.value);
-      setCustomCategories(next);
-      saveCustomCategories(next);
-      if (selectedCategory === category.value) {
-        setSelectedCategory('');
+      await deleteCategory(token, category.id);
+      if (selectedCategoryId === category.id) {
+        setSelectedCategoryId(0);
         setDrawerMode(null);
         setSelectedSummary(null);
         setSelectedDetail(null);
       }
-      await loadCommands(selectedCategory === category.value ? '' : selectedCategory, searchKeyword);
+      await loadCategories();
+      await loadCommands(selectedCategoryId === category.id ? 0 : selectedCategoryId, searchKeyword);
       await loadCategoryCounts();
     } catch (deleteError) {
       handleApiError(deleteError, '删除分类失败', setListError);
@@ -547,12 +606,24 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
   // 按分类统计数量(左侧分类树显示数字)
   // 基于全部命令 allCommands 计算,不受当前筛选/搜索影响
   const categoryCounts = useMemo(() => {
-    const map = new Map<string, number>();
+    const map = new Map<number, number>();
     for (const cmd of allCommands) {
-      map.set(cmd.category, (map.get(cmd.category) ?? 0) + 1);
+      map.set(cmd.category_id, (map.get(cmd.category_id) ?? 0) + 1);
     }
     return map;
   }, [allCommands]);
+
+  const categoryMap = useMemo(() => {
+    const map = new Map<number, Category>();
+    for (const category of categories) {
+      map.set(category.id, category);
+    }
+    return map;
+  }, [categories]);
+
+  const selectedCategoryName = useMemo(() => {
+    return categoryMap.get(selectedCategoryId)?.name ?? '全部命令';
+  }, [categoryMap, selectedCategoryId]);
 
   return (
     <>
@@ -626,18 +697,19 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
             <CategoryItem
               label="全部"
               count={allCommands.length}
-              active={selectedCategory === ''}
-              onClick={() => handleSelectCategory('')}
+              active={selectedCategoryId === 0}
+              onClick={() => handleSelectCategory(0)}
             />
-            {/* 固定分类 + 自定义分类 */}
-            {allCategories.map((item) => (
+            {/* 从后端加载的分类 */}
+            {categories.map((item) => (
               <CategoryItem
-                key={item.value}
-                label={item.label}
-                count={categoryCounts.get(item.value) ?? 0}
-                active={selectedCategory === item.value}
-                deletable={customCategories.some((custom) => custom.value === item.value)}
-                onClick={() => handleSelectCategory(item.value)}
+                key={item.id}
+                category={item}
+                count={categoryCounts.get(item.id) ?? 0}
+                active={selectedCategoryId === item.id}
+                deletable={true}
+                onClick={() => handleSelectCategory(item.id)}
+                onRenameConfirm={(newName) => void handleRenameCategoryDirect(item, newName)}
                 onDelete={(event) => void handleDeleteCategory(item, event)}
               />
             ))}
@@ -648,7 +720,7 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
         <section className="min-h-0 rounded-2xl border border-gray-200 bg-white overflow-hidden flex flex-col">
           <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-gray-800">
-              {selectedCategory ? getCategoryLabel(selectedCategory) : '全部命令'}
+              {selectedCategoryId ? selectedCategoryName : '全部命令'}
               <span className="ml-2 text-xs text-gray-500">{commands.length} 项</span>
             </h2>
           </div>
@@ -703,7 +775,7 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
                       <span className="text-sm font-semibold text-gray-900 truncate">
                         {cmd.title}
                       </span>
-                      <CategoryBadge value={cmd.category} />
+                      <CategoryBadge category={categoryMap.get(cmd.category_id)} />
                     </div>
                     {/* 第二行:命令文本 / 模板类型 */}
                     <div className="mt-1.5 flex items-center gap-2">
@@ -816,7 +888,7 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
                   isParsing={isParsing}
                   aiError={aiError}
                   onParseAI={handleParseAI}
-                  categories={allCategories}
+                  categories={categories}
                 />
               )}
             </div>
@@ -1007,55 +1079,166 @@ function ProcedureStepEditor(props: {
 
 /** 分类树条目 */
 function CategoryItem(props: {
-  label: string;
+  label?: string;
+  category?: Category;
   count: number;
   active: boolean;
   deletable?: boolean;
   onClick: () => void;
+  onRenameConfirm?: (newName: string) => void;
   onDelete?: (event: React.MouseEvent) => void;
 }) {
+  const label = props.category ? props.category.name : (props.label ?? '');
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState(label);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // 编辑时自动聚焦
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
+
+  // 点击外部关闭菜单或取消编辑
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      const target = e.target as HTMLElement;
+      if (contextMenu && menuRef.current && !menuRef.current.contains(target)) {
+        setContextMenu(null);
+      }
+      // 编辑模式：只在点击真正的外部区域时取消，排除提交按钮
+      if (isEditing && inputRef.current) {
+        const isSubmitButton = target.closest('button[type="submit"]');
+        const isInsideInput = inputRef.current.contains(target);
+        if (!isInsideInput && !isSubmitButton) {
+          setIsEditing(false);
+          setEditName(label);
+        }
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [contextMenu, isEditing, label]);
+
+  // ESC 键取消编辑
+  useEffect(() => {
+    if (!isEditing) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setIsEditing(false);
+        setEditName(label);
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isEditing, label]);
+
+  function handleContextMenu(e: React.MouseEvent) {
+    if (props.onRenameConfirm || props.onDelete) {
+      e.preventDefault();
+      setContextMenu({ x: e.clientX, y: e.clientY });
+    }
+  }
+
+  function handleStartRename() {
+    setContextMenu(null);
+    setEditName(label);
+    setIsEditing(true);
+  }
+
+  function handleConfirmRename() {
+    const name = editName.trim();
+    if (name && name !== label) {
+      props.onRenameConfirm?.(name);
+    }
+    setIsEditing(false);
+  }
+
+  // 编辑模式
+  if (isEditing) {
+    return (
+      <form
+        onSubmit={(e) => { e.preventDefault(); handleConfirmRename(); }}
+        className="flex items-center gap-1 rounded-lg px-2 py-1.5 bg-indigo-50"
+      >
+        <input
+          ref={inputRef}
+          type="text"
+          value={editName}
+          onChange={(e) => setEditName(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          className="flex-1 min-w-0 rounded border border-indigo-300 px-2 py-1 text-xs focus:border-indigo-500 focus:outline-none"
+        />
+        <button type="submit" title="确认" className="rounded p-1 text-indigo-600 hover:bg-indigo-100">
+          <Check size={12} />
+        </button>
+      </form>
+    );
+  }
+
   return (
-    <button
-      type="button"
-      onClick={props.onClick}
-      className={`group w-full flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors ${
-        props.active
-          ? 'bg-indigo-50 text-indigo-700 font-medium'
-          : 'text-gray-700 hover:bg-gray-50'
-      }`}
-    >
-      <span>{props.label}</span>
-      <span className="flex items-center gap-1.5">
-        <span className={`text-xs ${props.active ? 'text-indigo-500' : 'text-gray-400'}`}>
-          {props.count}
-        </span>
-        {props.deletable && props.onDelete && (
-          <span
-            role="button"
-            tabIndex={0}
-            onClick={props.onDelete}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                props.onDelete?.(event as unknown as React.MouseEvent);
-              }
-            }}
-            title="删除分类"
-            className="opacity-0 group-hover:opacity-100 focus:opacity-100 rounded p-0.5 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-opacity"
-          >
-            <Trash2 size={14} />
+    <>
+      <button
+        type="button"
+        onClick={props.onClick}
+        onContextMenu={handleContextMenu}
+        className={`group w-full flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors ${
+          props.active
+            ? 'bg-indigo-50 text-indigo-700 font-medium'
+            : 'text-gray-700 hover:bg-gray-50'
+        }`}
+      >
+        <span className="truncate">{label}</span>
+        <span className="flex items-center gap-1.5">
+          <span className={`text-xs ${props.active ? 'text-indigo-500' : 'text-gray-400'}`}>
+            {props.count}
           </span>
-        )}
-      </span>
-    </button>
+        </span>
+      </button>
+
+      {/* 右键上下文菜单 */}
+      {contextMenu && (
+        <div
+          ref={menuRef}
+          className="fixed z-50 min-w-[120px] rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          {props.onRenameConfirm && (
+            <button
+              type="button"
+              onClick={handleStartRename}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100"
+            >
+              <Pencil size={14} />
+              重命名
+            </button>
+          )}
+          {props.deletable && props.onDelete && (
+            <button
+              type="button"
+              onClick={() => { setContextMenu(null); props.onDelete?.(undefined as unknown as React.MouseEvent); }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-red-600 hover:bg-red-50"
+            >
+              <Trash2 size={14} />
+              删除分类
+            </button>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 
 /** 分类标签徽章 */
-function CategoryBadge(props: { value: string }) {
+function CategoryBadge(props: { category?: Category; value?: string }) {
+  const displayName = props.category?.name ?? props.value ?? '其他';
   return (
     <span className="shrink-0 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600">
-      {getCategoryLabel(props.value)}
+      {displayName}
     </span>
   );
 }
@@ -1294,7 +1477,7 @@ function CommandForm(props: {
   isParsing: boolean;
   aiError: string | null;
   onParseAI: () => void;
-  categories: Array<{ value: string; label: string }>;
+  categories: Category[];
 }) {
   const {
     values,
@@ -1375,13 +1558,13 @@ function CommandForm(props: {
         <label className="block">
           <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">一级分类</span>
           <select
-            value={values.category}
-            onChange={(e) => updateField('category', e.target.value)}
+            value={values.category_id}
+            onChange={(e) => updateField('category_id', Number(e.target.value))}
             className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             required
           >
             {categories.map((item) => (
-              <option key={item.value} value={item.value}>{item.label}</option>
+              <option key={item.id} value={item.id}>{item.name}</option>
             ))}
           </select>
         </label>
