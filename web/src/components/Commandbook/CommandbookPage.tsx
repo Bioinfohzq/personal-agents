@@ -26,6 +26,7 @@ import {
   deleteCommand,
   getCommand,
   listCommands,
+  moveCommandsCategory,
   parseCommandAI,
   updateCommand,
 } from '../../api/commandbook';
@@ -34,6 +35,7 @@ import {
   emptyCommandForm,
   getAllCategories,
   getCategoryLabel,
+  getTemplateTypeLabel,
   loadCustomCategories,
   parseParameters,
   saveCustomCategories,
@@ -44,6 +46,8 @@ import type {
   CommandInput,
   CommandSummary,
   CustomCategory,
+  ProcedureStep,
+  TemplateType,
 } from '../../types/commandbook';
 import { useAuth } from '../../auth/AuthContext';
 
@@ -326,6 +330,8 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
       scenarios: selectedDetail.scenarios ?? '',
       notes: selectedDetail.notes ?? '',
       reference_url: selectedDetail.reference_url ?? '',
+      template_type: selectedDetail.template_type ?? 'article',
+      steps: selectedDetail.steps ?? [],
     });
     setDrawerError(null);
     resetAIState();
@@ -362,6 +368,7 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
       const result = await parseCommandAI(token, {
         raw_text: rawText,
         category: formValues.category,
+        template_type: formValues.template_type,
       });
 
       setFormValues((prev) => ({
@@ -375,6 +382,8 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
         scenarios: result.scenarios || prev.scenarios,
         notes: result.notes || prev.notes,
         reference_url: result.reference_url || prev.reference_url,
+        template_type: result.template_type || prev.template_type,
+        steps: result.steps && result.steps.length > 0 ? result.steps : prev.steps,
       }));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'AI 解析失败';
@@ -388,8 +397,16 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!formValues.title.trim() || !formValues.command_text.trim() || !formValues.category) {
-      setDrawerError('标题/含义、命令、分类都是必填项');
+    if (!formValues.title.trim() || !formValues.category) {
+      setDrawerError('标题/含义和分类是必填项');
+      return;
+    }
+    if (formValues.template_type === 'article' && !formValues.command_text.trim()) {
+      setDrawerError('单条命令模板下,完整命令是必填项');
+      return;
+    }
+    if (formValues.template_type === 'procedure' && formValues.steps.length === 0) {
+      setDrawerError('流程模板下,至少需要添加一个步骤');
       return;
     }
 
@@ -406,6 +423,8 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
       scenarios: formValues.scenarios.trim(),
       notes: formValues.notes.trim(),
       reference_url: formValues.reference_url.trim(),
+      template_type: formValues.template_type,
+      steps: formValues.steps,
     };
 
     try {
@@ -449,6 +468,53 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
       handleApiError(deleteError, '删除失败', setDrawerError);
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  // 从列表卡片删除命令
+  async function handleDeleteCommandFromList(cmd: CommandSummary, event: React.MouseEvent) {
+    event.stopPropagation();
+    const confirmed = window.confirm(`确定删除命令「${cmd.title}」吗？`);
+    if (!confirmed) return;
+
+    try {
+      await deleteCommand(token, cmd.id);
+      await loadCommands(selectedCategory, searchKeyword);
+      await loadCategoryCounts();
+      if (selectedSummary?.id === cmd.id) {
+        closeDrawer();
+      }
+    } catch (deleteError) {
+      handleApiError(deleteError, '删除失败', setListError);
+    }
+  }
+
+  // 删除自定义分类:将其下命令移动到"其他"
+  async function handleDeleteCategory(category: CustomCategory, event: React.MouseEvent) {
+    event.stopPropagation();
+    const count = categoryCounts.get(category.value) ?? 0;
+    const confirmed = window.confirm(
+      `确定删除分类「${category.label}」吗？该分类下的 ${count} 条命令将移动到「其他」分类。`,
+    );
+    if (!confirmed) return;
+
+    try {
+      if (count > 0) {
+        await moveCommandsCategory(token, category.value, 'other');
+      }
+      const next = customCategories.filter((item) => item.value !== category.value);
+      setCustomCategories(next);
+      saveCustomCategories(next);
+      if (selectedCategory === category.value) {
+        setSelectedCategory('');
+        setDrawerMode(null);
+        setSelectedSummary(null);
+        setSelectedDetail(null);
+      }
+      await loadCommands(selectedCategory === category.value ? '' : selectedCategory, searchKeyword);
+      await loadCategoryCounts();
+    } catch (deleteError) {
+      handleApiError(deleteError, '删除分类失败', setListError);
     }
   }
 
@@ -559,7 +625,7 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
             {/* 全部分类 */}
             <CategoryItem
               label="全部"
-              count={commands.length}
+              count={allCommands.length}
               active={selectedCategory === ''}
               onClick={() => handleSelectCategory('')}
             />
@@ -570,7 +636,9 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
                 label={item.label}
                 count={categoryCounts.get(item.value) ?? 0}
                 active={selectedCategory === item.value}
+                deletable={customCategories.some((custom) => custom.value === item.value)}
                 onClick={() => handleSelectCategory(item.value)}
+                onDelete={(event) => void handleDeleteCategory(item, event)}
               />
             ))}
           </div>
@@ -608,22 +676,49 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
                     key={cmd.id}
                     type="button"
                     onClick={() => void openCommandDetail(cmd)}
-                    className={`w-full text-left rounded-xl border p-3 transition-colors hover:border-indigo-300 hover:bg-indigo-50/40 ${
+                    className={`group relative w-full text-left rounded-xl border p-3 transition-colors hover:border-indigo-300 hover:bg-indigo-50/40 ${
                       selectedSummary?.id === cmd.id
                         ? 'border-indigo-300 bg-indigo-50'
                         : 'border-gray-200'
                     }`}
                   >
+                    {/* 删除按钮:悬停显示 */}
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(event) => void handleDeleteCommandFromList(cmd, event)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          void handleDeleteCommandFromList(cmd, event as unknown as React.MouseEvent);
+                        }
+                      }}
+                      title="删除命令"
+                      className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 focus:opacity-100 rounded p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-opacity"
+                    >
+                      <Trash2 size={14} />
+                    </span>
                     {/* 第一行:标题(兼含义) + 分类标签 */}
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center justify-between gap-2 pr-7">
                       <span className="text-sm font-semibold text-gray-900 truncate">
                         {cmd.title}
                       </span>
                       <CategoryBadge value={cmd.category} />
                     </div>
-                    {/* 第二行:命令文本 */}
-                    <div className="mt-1.5 font-mono text-xs text-gray-600 bg-gray-50 rounded px-2 py-1 truncate">
-                      {cmd.command_text}
+                    {/* 第二行:命令文本 / 模板类型 */}
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <span
+                        className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                          cmd.template_type === 'procedure'
+                            ? 'bg-purple-50 text-purple-600'
+                            : 'bg-blue-50 text-blue-600'
+                        }`}
+                      >
+                        {getTemplateTypeLabel(cmd.template_type)}
+                      </span>
+                      <span className="flex-1 font-mono text-xs text-gray-600 bg-gray-50 rounded px-2 py-1 truncate">
+                        {cmd.command_text}
+                      </span>
                     </div>
                     {/* 第三行:子分类(二级) */}
                     {cmd.sub_category && (
@@ -816,6 +911,98 @@ function ScenarioEditor(props: { value: string; onChange: (value: string) => voi
   );
 }
 
+/** 流程步骤编辑器 */
+function ProcedureStepEditor(props: {
+  value: ProcedureStep[];
+  onChange: (value: ProcedureStep[]) => void;
+}) {
+  const { value, onChange } = props;
+  const [steps, setSteps] = useState<ProcedureStep[]>(() => value);
+
+  useEffect(() => {
+    setSteps(value);
+  }, [value]);
+
+  function updateSteps(next: ProcedureStep[]) {
+    setSteps(next);
+    onChange(next);
+  }
+
+  function updateStep(index: number, patch: Partial<ProcedureStep>) {
+    const next = steps.map((s, idx) => (idx === index ? { ...s, ...patch } : s));
+    updateSteps(next);
+  }
+
+  function addStep() {
+    updateSteps([...steps, { title: '', code: '', note: '' }]);
+  }
+
+  function removeStep(index: number) {
+    const next = steps.filter((_, idx) => idx !== index);
+    updateSteps(next.length > 0 ? next : [{ title: '', code: '', note: '' }]);
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">流程步骤</span>
+        <button
+          type="button"
+          onClick={addStep}
+          className="inline-flex items-center gap-1 rounded-lg border border-purple-200 px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50"
+        >
+          <Plus size={12} />
+          添加步骤
+        </button>
+      </div>
+
+      {steps.map((step, index) => (
+        <div
+          key={index}
+          className="rounded-lg border border-gray-200 bg-white p-3 space-y-2"
+        >
+          <div className="flex items-start gap-2">
+            <span className="shrink-0 pt-2 text-xs font-medium text-purple-700">
+              步骤{index + 1}：
+            </span>
+            <input
+              type="text"
+              value={step.title}
+              onChange={(e) => updateStep(index, { title: e.target.value })}
+              placeholder="步骤标题"
+              className="flex-1 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+            {steps.length > 1 && (
+              <button
+                type="button"
+                onClick={() => removeStep(index)}
+                className="shrink-0 rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                title="删除步骤"
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
+          </div>
+          <textarea
+            value={step.code}
+            onChange={(e) => updateStep(index, { code: e.target.value })}
+            placeholder="该步骤要执行的命令或代码(可选)"
+            rows={3}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          />
+          <textarea
+            value={step.note}
+            onChange={(e) => updateStep(index, { note: e.target.value })}
+            placeholder="补充说明或注意事项(可选)"
+            rows={2}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // --- 子组件 ---
 
 /** 分类树条目 */
@@ -823,21 +1010,42 @@ function CategoryItem(props: {
   label: string;
   count: number;
   active: boolean;
+  deletable?: boolean;
   onClick: () => void;
+  onDelete?: (event: React.MouseEvent) => void;
 }) {
   return (
     <button
       type="button"
       onClick={props.onClick}
-      className={`w-full flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors ${
+      className={`group w-full flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors ${
         props.active
           ? 'bg-indigo-50 text-indigo-700 font-medium'
           : 'text-gray-700 hover:bg-gray-50'
       }`}
     >
       <span>{props.label}</span>
-      <span className={`text-xs ${props.active ? 'text-indigo-500' : 'text-gray-400'}`}>
-        {props.count}
+      <span className="flex items-center gap-1.5">
+        <span className={`text-xs ${props.active ? 'text-indigo-500' : 'text-gray-400'}`}>
+          {props.count}
+        </span>
+        {props.deletable && props.onDelete && (
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={props.onDelete}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                props.onDelete?.(event as unknown as React.MouseEvent);
+              }
+            }}
+            title="删除分类"
+            className="opacity-0 group-hover:opacity-100 focus:opacity-100 rounded p-0.5 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-opacity"
+          >
+            <Trash2 size={14} />
+          </span>
+        )}
       </span>
     </button>
   );
@@ -874,34 +1082,159 @@ function CommandDetailView(props: {
               {detail.sub_category}
             </span>
           )}
+          <span
+            className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+              detail.template_type === 'procedure'
+                ? 'bg-purple-50 text-purple-600'
+                : 'bg-blue-50 text-blue-600'
+            }`}
+          >
+            {getTemplateTypeLabel(detail.template_type)}
+          </span>
         </div>
         <h3 className="text-lg font-semibold text-gray-900 break-all">
           {detail.title}
         </h3>
       </div>
 
-      {/* 完整命令(带复制按钮) */}
-      <div>
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">命令</span>
-          <div className="flex items-center gap-2">
-            {copyFeedback && (
-              <span className="text-xs text-green-600 animate-pulse">{copyFeedback}</span>
-            )}
-            <button
-              type="button"
-              onClick={() => onCopy(detail.command_text)}
-              className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-700"
-            >
-              <Copy size={12} />
-              复制
-            </button>
+      {detail.template_type === 'procedure' ? (
+        <>
+          {/* 流程步骤 */}
+          {detail.steps && detail.steps.length > 0 && (
+            <div>
+              <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">流程步骤</div>
+              <div className="space-y-3">
+                {detail.steps.map((step, idx) => (
+                  <div key={idx} className="rounded-lg border border-purple-100 bg-purple-50/50 p-3 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="shrink-0 rounded bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700">
+                        步骤{idx + 1}
+                      </span>
+                      <span className="text-sm font-medium text-gray-900">{step.title}</span>
+                    </div>
+                    {step.code && (
+                      <div className="flex items-center justify-between gap-2">
+                        <pre className="flex-1 font-mono text-xs text-gray-800 bg-white rounded px-2 py-1.5 whitespace-pre-wrap break-all">
+                          {step.code}
+                        </pre>
+                        <button
+                          type="button"
+                          onClick={() => onCopy(step.code!)}
+                          className="shrink-0 inline-flex items-center gap-1 text-xs text-purple-600 hover:text-purple-700"
+                        >
+                          <Copy size={12} />
+                          复制
+                        </button>
+                      </div>
+                    )}
+                    {step.note && (
+                      <div className="text-sm text-gray-700 whitespace-pre-wrap break-words">
+                        {step.note}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          {/* 完整命令(带复制按钮) */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">命令</span>
+              <div className="flex items-center gap-2">
+                {copyFeedback && (
+                  <span className="text-xs text-green-600 animate-pulse">{copyFeedback}</span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => onCopy(detail.command_text)}
+                  className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-700"
+                >
+                  <Copy size={12} />
+                  复制
+                </button>
+              </div>
+            </div>
+            <pre className="font-mono text-sm text-gray-800 bg-gray-50 rounded-lg p-3 whitespace-pre-wrap break-all">
+              {detail.command_text}
+            </pre>
           </div>
-        </div>
-        <pre className="font-mono text-sm text-gray-800 bg-gray-50 rounded-lg p-3 whitespace-pre-wrap break-all">
-          {detail.command_text}
-        </pre>
-      </div>
+
+          {/* 参数说明表格(三级:每个参数的含义) */}
+          {parameters.length > 0 && (
+            <div>
+              <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">参数说明</div>
+              <div className="overflow-hidden rounded-lg border border-gray-200">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-gray-50 text-xs uppercase text-gray-500">
+                    <tr>
+                      <th className="px-3 py-2 font-medium w-20">参数</th>
+                      <th className="px-3 py-2 font-medium w-32">全称</th>
+                      <th className="px-3 py-2 font-medium">含义</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {parameters.map((item, idx) => (
+                      <tr key={idx}>
+                        <td className="px-3 py-2 font-mono text-indigo-700 align-top">
+                          {item.param}
+                        </td>
+                        <td className="px-3 py-2 font-mono text-gray-600 align-top">
+                          {item.fullName || '-'}
+                        </td>
+                        <td className="px-3 py-2 text-gray-800 break-words align-top">
+                          {item.desc}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* 使用场景 */}
+          {detail.scenarios && (
+            <div>
+              <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">使用场景</div>
+              <div className="rounded-lg border border-indigo-100 bg-indigo-50/50 p-3 space-y-2">
+                {detail.scenarios.split('\n').reduce<string[][]>((groups, line) => {
+                  const trimmed = line.trim();
+                  if (!trimmed) return groups;
+                  if (trimmed.startsWith('场景')) {
+                    groups.push([trimmed]);
+                  } else if (groups.length > 0) {
+                    groups[groups.length - 1].push(trimmed);
+                  } else {
+                    groups.push([trimmed]);
+                  }
+                  return groups;
+                }, []).map((group, idx) => (
+                  <div key={idx} className="space-y-1">
+                    {group.map((line, lineIdx) =>
+                      line.startsWith('场景') ? (
+                        <div key={lineIdx} className="text-sm font-medium text-indigo-700">
+                          {line}
+                        </div>
+                      ) : (
+                        <pre
+                          key={lineIdx}
+                          className="font-mono text-xs text-gray-800 bg-white rounded px-2 py-1.5 whitespace-pre-wrap break-all"
+                        >
+                          {line}
+                        </pre>
+                      )
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
 
       {/* 详细介绍 */}
       {detail.introduction && (
@@ -909,77 +1242,6 @@ function CommandDetailView(props: {
           <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">详细介绍</div>
           <div className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3 whitespace-pre-wrap break-words">
             {detail.introduction}
-          </div>
-        </div>
-      )}
-
-      {/* 参数说明表格(三级:每个参数的含义) */}
-      {parameters.length > 0 && (
-        <div>
-          <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">参数说明</div>
-          <div className="overflow-hidden rounded-lg border border-gray-200">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-gray-50 text-xs uppercase text-gray-500">
-                <tr>
-                  <th className="px-3 py-2 font-medium w-20">参数</th>
-                  <th className="px-3 py-2 font-medium w-32">全称</th>
-                  <th className="px-3 py-2 font-medium">含义</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {parameters.map((item, idx) => (
-                  <tr key={idx}>
-                    <td className="px-3 py-2 font-mono text-indigo-700 align-top">
-                      {item.param}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-gray-600 align-top">
-                      {item.fullName || '-'}
-                    </td>
-                    <td className="px-3 py-2 text-gray-800 break-words align-top">
-                      {item.desc}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* 使用场景 */}
-      {detail.scenarios && (
-        <div>
-          <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">使用场景</div>
-          <div className="rounded-lg border border-indigo-100 bg-indigo-50/50 p-3 space-y-2">
-            {detail.scenarios.split('\n').reduce<string[][]>((groups, line) => {
-              const trimmed = line.trim();
-              if (!trimmed) return groups;
-              if (trimmed.startsWith('场景')) {
-                groups.push([trimmed]);
-              } else if (groups.length > 0) {
-                groups[groups.length - 1].push(trimmed);
-              } else {
-                groups.push([trimmed]);
-              }
-              return groups;
-            }, []).map((group, idx) => (
-              <div key={idx} className="space-y-1">
-                {group.map((line, lineIdx) =>
-                  line.startsWith('场景') ? (
-                    <div key={lineIdx} className="text-sm font-medium text-indigo-700">
-                      {line}
-                    </div>
-                  ) : (
-                    <pre
-                      key={lineIdx}
-                      className="font-mono text-xs text-gray-800 bg-white rounded px-2 py-1.5 whitespace-pre-wrap break-all"
-                    >
-                      {line}
-                    </pre>
-                  )
-                )}
-              </div>
-            ))}
           </div>
         </div>
       )}
@@ -1082,6 +1344,19 @@ function CommandForm(props: {
         </button>
       </div>
 
+      {/* 模板类型 */}
+      <label className="block">
+        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">模板类型</span>
+        <select
+          value={values.template_type}
+          onChange={(e) => updateField('template_type', e.target.value as TemplateType)}
+          className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+        >
+          <option value="article">单条命令</option>
+          <option value="procedure">流程模板</option>
+        </select>
+      </label>
+
       {/* 标题/一句话含义(合并字段) */}
       <label className="block">
         <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">标题 / 一句话含义</span>
@@ -1123,18 +1398,45 @@ function CommandForm(props: {
         </label>
       </div>
 
-      {/* 完整命令 */}
-      <label className="block">
-        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">完整命令</span>
-        <textarea
-          value={values.command_text}
-          onChange={(e) => updateField('command_text', e.target.value)}
-          placeholder={`du -sh /var/log`}
-          rows={3}
-          className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          required
+      {values.template_type === 'article' ? (
+        <>
+          {/* 完整命令 */}
+          <label className="block">
+            <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">完整命令</span>
+            <textarea
+              value={values.command_text}
+              onChange={(e) => updateField('command_text', e.target.value)}
+              placeholder={`du -sh /var/log`}
+              rows={3}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              required
+            />
+          </label>
+
+          {/* 参数说明表格(三级,每行: 参数 | 全称 | 含义) */}
+          <label className="block">
+            <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">参数说明(三级)</span>
+            <span className="text-xs text-gray-400 ml-1">每行一个,格式:参数 | 全称 | 含义</span>
+            <textarea
+              value={values.parameters}
+              onChange={(e) => updateField('parameters', e.target.value)}
+              placeholder={`-s|--summarize|只显示每个目标的总大小,不展开子目录明细
+-h|--human-readable|人类可读格式(KB/MB/GB)
+-d 1|--max-depth=1|只显示一层子目录深度`}
+              rows={5}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+          </label>
+
+          {/* 使用场景 */}
+          <ScenarioEditor value={values.scenarios} onChange={(v) => updateField('scenarios', v)} />
+        </>
+      ) : (
+        <ProcedureStepEditor
+          value={values.steps}
+          onChange={(v) => updateField('steps', v)}
         />
-      </label>
+      )}
 
       {/* 详细介绍 */}
       <label className="block">
@@ -1147,24 +1449,6 @@ function CommandForm(props: {
           className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
       </label>
-
-      {/* 参数说明表格(三级,每行: 参数 | 全称 | 含义) */}
-      <label className="block">
-        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">参数说明(三级)</span>
-        <span className="text-xs text-gray-400 ml-1">每行一个,格式:参数 | 全称 | 含义</span>
-        <textarea
-          value={values.parameters}
-          onChange={(e) => updateField('parameters', e.target.value)}
-          placeholder={`-s|--summarize|只显示每个目标的总大小,不展开子目录明细
--h|--human-readable|人类可读格式(KB/MB/GB)
--d 1|--max-depth=1|只显示一层子目录深度`}
-          rows={5}
-          className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-        />
-      </label>
-
-      {/* 使用场景 */}
-      <ScenarioEditor value={values.scenarios} onChange={(v) => updateField('scenarios', v)} />
 
       {/* 我的理解 */}
       <label className="block">

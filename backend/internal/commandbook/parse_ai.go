@@ -16,24 +16,58 @@ import (
 
 // ParseAIRequest AI 解释文本解析请求
 type ParseAIRequest struct {
-	RawText  string `json:"raw_text"`
-	Category string `json:"category"`
+	RawText      string `json:"raw_text"`
+	Category     string `json:"category"`
+	TemplateType string `json:"template_type"`
 }
 
 // ParseAIResponse AI 解析结果
 type ParseAIResponse struct {
-	Title        string `json:"title"`
-	CommandText  string `json:"command_text"`
-	Category     string `json:"category"`
-	SubCategory  string `json:"sub_category"`
-	Introduction string `json:"introduction"`
-	Parameters   string `json:"parameters"`
-	Scenarios    string `json:"scenarios"`
-	Notes        string `json:"notes"`
-	ReferenceURL string `json:"reference_url"`
+	Title        string          `json:"title"`
+	CommandText  string          `json:"command_text"`
+	Category     string          `json:"category"`
+	SubCategory  string          `json:"sub_category"`
+	Introduction string          `json:"introduction"`
+	Parameters   string          `json:"parameters"`
+	Scenarios    string          `json:"scenarios"`
+	Notes        string          `json:"notes"`
+	ReferenceURL string          `json:"reference_url"`
+	TemplateType string          `json:"template_type"`
+	Steps        []ProcedureStep `json:"steps"`
 }
 
-const parseAIPrompt = `你是一位命令手册整理助手。请根据用户提供的 AI 解释文本,提取并整理成结构化的命令记录。
+func buildParseAIPrompt(templateType string) string {
+	if templateType == "procedure" {
+		return `你是一位命令手册整理助手。请根据用户提供的 AI 解释文本,提取并整理成一个流程模板(多步骤命令流程)。
+
+要求:
+1. title: 流程标题 + 一句话说明,例如 "Docker 部署 Node.js 应用 - 从镜像构建到容器启动"。
+2. sub_category: 流程所属的二级分类,如"部署流程"、"故障排查"、"环境配置"、"日常运维"等,只能是一个短语。
+3. introduction: 流程的整体介绍,100-300 字,说明适用场景和最终目标。
+4. steps: 流程步骤数组,每个步骤包含 title(步骤标题,必填)、code(该步骤要执行的命令或代码,可选)、note(该步骤的补充说明或注意事项,可选)。例如:
+[
+  {"title": "构建 Docker 镜像", "code": "docker build -t myapp:latest .", "note": "确保 Dockerfile 位于当前目录"},
+  {"title": "启动容器", "code": "docker run -d -p 3000:3000 myapp:latest", "note": ""}
+]
+5. notes: 个人理解或记忆要点,从解释文本中提炼最实用的信息。如果没有,可以留空。
+6. reference_url: 如果文本中包含官方文档链接,提取出来;否则留空。
+7. template_type: 固定输出 "procedure"。
+
+只能输出 JSON,不要任何 Markdown 代码块标记,不要额外说明。JSON 字段如下:
+{
+  "title": "",
+  "sub_category": "",
+  "introduction": "",
+  "steps": [],
+  "notes": "",
+  "reference_url": "",
+  "template_type": "procedure"
+}
+
+以下是用户提供的 AI 解释文本:`
+	}
+
+	return `你是一位命令手册整理助手。请根据用户提供的 AI 解释文本,提取并整理成结构化的命令记录。
 
 要求:
 1. title: 命令 + 一句话含义,例如 "tmux - 终端会话复用工具"或 "du - 查看目录/文件磁盘使用情况"。
@@ -50,6 +84,7 @@ const parseAIPrompt = `你是一位命令手册整理助手。请根据用户提
  du -h --max-depth=1 /var/log
 7. notes: 个人理解或记忆要点,从解释文本中提炼最实用的信息。如果没有,可以留空。
 8. reference_url: 如果文本中包含官方文档链接,提取出来;否则留空。
+9. template_type: 固定输出 "article"。
 
 只能输出 JSON,不要任何 Markdown 代码块标记,不要额外说明。JSON 字段如下:
 {
@@ -60,10 +95,12 @@ const parseAIPrompt = `你是一位命令手册整理助手。请根据用户提
   "parameters": "",
   "scenarios": "",
   "notes": "",
-  "reference_url": ""
+  "reference_url": "",
+  "template_type": "article"
 }
 
 以下是用户提供的 AI 解释文本:`
+}
 
 type chatMessage struct {
 	Role    string `json:"role"`
@@ -103,7 +140,15 @@ func (handler *Handler) ParseAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := handler.parseWithLLM(r.Context(), req.RawText)
+	if req.TemplateType == "" {
+		req.TemplateType = "article"
+	}
+	if !isValidTemplateType(req.TemplateType) {
+		writeError(w, http.StatusBadRequest, "invalid template_type")
+		return
+	}
+
+	result, err := handler.parseWithLLM(r.Context(), req.RawText, req.TemplateType)
 	if err != nil {
 		slog.Error("parse command with llm failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "parse failed")
@@ -120,7 +165,7 @@ func (handler *Handler) ParseAI(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (handler *Handler) parseWithLLM(ctx context.Context, rawText string) (*ParseAIResponse, error) {
+func (handler *Handler) parseWithLLM(ctx context.Context, rawText string, templateType string) (*ParseAIResponse, error) {
 	resolved, err := config.ResolveLLM(handler.llm)
 	if err != nil {
 		return nil, err
@@ -131,7 +176,7 @@ func (handler *Handler) parseWithLLM(ctx context.Context, rawText string) (*Pars
 	payload := chatRequest{
 		Model: resolved.Model,
 		Messages: []chatMessage{
-			{Role: "system", Content: parseAIPrompt},
+			{Role: "system", Content: buildParseAIPrompt(templateType)},
 			{Role: "user", Content: rawText},
 		},
 		Stream: false,
@@ -195,6 +240,15 @@ func (handler *Handler) parseWithLLM(ctx context.Context, rawText string) (*Pars
 	result.Scenarios = strings.TrimSpace(result.Scenarios)
 	result.Notes = strings.TrimSpace(result.Notes)
 	result.ReferenceURL = strings.TrimSpace(result.ReferenceURL)
+	result.TemplateType = strings.TrimSpace(result.TemplateType)
+	if result.TemplateType == "" {
+		result.TemplateType = templateType
+	}
+	for i := range result.Steps {
+		result.Steps[i].Title = strings.TrimSpace(result.Steps[i].Title)
+		result.Steps[i].Code = strings.TrimSpace(result.Steps[i].Code)
+		result.Steps[i].Note = strings.TrimSpace(result.Steps[i].Note)
+	}
 
 	return &result, nil
 }

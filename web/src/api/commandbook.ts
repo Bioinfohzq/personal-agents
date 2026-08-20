@@ -73,6 +73,20 @@ export async function deleteCommand(token: string, commandId: number): Promise<v
   await assertBusinessResponse(response, '删除命令失败');
 }
 
+// moveCommandsCategory 批量迁移分类
+// 用于删除自定义分类时,将其下所有命令移动到新的默认分类(如 other)
+export async function moveCommandsCategory(
+  token: string,
+  oldCategory: string,
+  newCategory: string,
+): Promise<void> {
+  const response = await businessFetch(token, '/api/v1/commands/category', {
+    method: 'PUT',
+    body: JSON.stringify({ old_category: oldCategory, new_category: newCategory }),
+  });
+  await assertBusinessResponse(response, '迁移分类失败');
+}
+
 // parseCommandAI 智能解析 AI 解释文本并预填命令字段
 export async function parseCommandAI(
   token: string,

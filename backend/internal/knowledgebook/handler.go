@@ -26,6 +26,18 @@ func isValidCategory(category string) bool {
 	return !strings.ContainsAny(category, " \t\r\n")
 }
 
+// isValidTemplateType 校验模板类型
+func isValidTemplateType(templateType string) bool {
+	return templateType == "article" || templateType == "procedure"
+}
+
+// ProcedureStep 流程模板单步骤
+type ProcedureStep struct {
+	Title string `json:"title"`
+	Code  string `json:"code,omitempty"`
+	Note  string `json:"note,omitempty"`
+}
+
 // Handler 知识库 HTTP 处理器
 type Handler struct {
 	store *database.Store
@@ -34,36 +46,40 @@ type Handler struct {
 
 // KnowledgeRequest 创建/更新知识请求体
 type KnowledgeRequest struct {
-	Title        string `json:"title"`
-	Category     string `json:"category"`
-	SubCategory  string `json:"sub_category"`
-	Tags         string `json:"tags"`
-	Summary      string `json:"summary"`
-	Content      string `json:"content"`
-	Notes        string `json:"notes"`
-	ReferenceURL string `json:"reference_url"`
-	Extra        string `json:"extra"`
+	Title        string          `json:"title"`
+	Category     string          `json:"category"`
+	SubCategory  string          `json:"sub_category"`
+	Tags         string          `json:"tags"`
+	Summary      string          `json:"summary"`
+	Content      string          `json:"content"`
+	Notes        string          `json:"notes"`
+	ReferenceURL string          `json:"reference_url"`
+	Extra        string          `json:"extra"`
+	TemplateType string          `json:"template_type"`
+	Steps        []ProcedureStep `json:"steps"`
 }
 
 // KnowledgeSummary 知识摘要(列表用)
 type KnowledgeSummary struct {
-	ID          int64     `json:"id"`
-	Title       string    `json:"title"`
-	Category    string    `json:"category"`
-	SubCategory string    `json:"sub_category,omitempty"`
-	Tags        string    `json:"tags,omitempty"`
-	Summary     string    `json:"summary,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID           int64     `json:"id"`
+	Title        string    `json:"title"`
+	Category     string    `json:"category"`
+	SubCategory  string    `json:"sub_category,omitempty"`
+	Tags         string    `json:"tags,omitempty"`
+	Summary      string    `json:"summary,omitempty"`
+	TemplateType string    `json:"template_type"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // KnowledgeDetail 知识详情
 type KnowledgeDetail struct {
 	KnowledgeSummary
-	Content      string `json:"content,omitempty"`
-	Notes        string `json:"notes,omitempty"`
-	ReferenceURL string `json:"reference_url,omitempty"`
-	Extra        string `json:"extra,omitempty"`
+	Content      string          `json:"content,omitempty"`
+	Notes        string          `json:"notes,omitempty"`
+	ReferenceURL string          `json:"reference_url,omitempty"`
+	Extra        string          `json:"extra,omitempty"`
+	Steps        []ProcedureStep `json:"steps,omitempty"`
 }
 
 // knowledgeRecord 数据库行映射结构体
@@ -78,6 +94,8 @@ type knowledgeRecord struct {
 	Notes        sql.NullString
 	ReferenceURL sql.NullString
 	Extra        sql.NullString
+	TemplateType string
+	Steps        sql.NullString
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -143,7 +161,7 @@ func (handler *Handler) ListKnowledgeItems(w http.ResponseWriter, r *http.Reques
 
 	rows, err := handler.store.DB().QueryContext(
 		r.Context(),
-		`SELECT id, title, category, sub_category, tags, summary, created_at, updated_at
+		`SELECT id, title, category, sub_category, tags, summary, template_type, created_at, updated_at
 		 FROM knowledge_items
 		 WHERE user_id = ?
 		   AND (? = '' OR category = ?)
@@ -162,7 +180,7 @@ func (handler *Handler) ListKnowledgeItems(w http.ResponseWriter, r *http.Reques
 	items := make([]KnowledgeSummary, 0)
 	for rows.Next() {
 		var record knowledgeRecord
-		if err := rows.Scan(&record.ID, &record.Title, &record.Category, &record.SubCategory, &record.Tags, &record.Summary, &record.CreatedAt, &record.UpdatedAt); err != nil {
+		if err := rows.Scan(&record.ID, &record.Title, &record.Category, &record.SubCategory, &record.Tags, &record.Summary, &record.TemplateType, &record.CreatedAt, &record.UpdatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read knowledge item")
 			return
 		}
@@ -193,8 +211,23 @@ func (handler *Handler) CreateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 	}
 
 	request.normalize()
+	if request.TemplateType == "" {
+		request.TemplateType = "article"
+	}
+	if !isValidTemplateType(request.TemplateType) {
+		writeError(w, http.StatusBadRequest, "invalid template_type")
+		return
+	}
 	if request.Title == "" || request.Category == "" {
 		writeError(w, http.StatusBadRequest, "title and category are required")
+		return
+	}
+	if request.TemplateType == "article" && request.Content == "" {
+		writeError(w, http.StatusBadRequest, "content is required for article template")
+		return
+	}
+	if request.TemplateType == "procedure" && len(request.Steps) == 0 {
+		writeError(w, http.StatusBadRequest, "steps are required for procedure template")
 		return
 	}
 
@@ -208,10 +241,16 @@ func (handler *Handler) CreateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	stepsJSON, err := json.Marshal(request.Steps)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid steps")
+		return
+	}
+
 	result, err := handler.store.DB().ExecContext(
 		r.Context(),
-		`INSERT INTO knowledge_items (user_id, title, category, sub_category, tags, summary, content, notes, reference_url, extra)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO knowledge_items (user_id, title, category, sub_category, tags, summary, content, notes, reference_url, extra, template_type, steps)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		userID,
 		request.Title,
 		request.Category,
@@ -222,6 +261,8 @@ func (handler *Handler) CreateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 		nullableString(request.Notes),
 		nullableString(request.ReferenceURL),
 		nullableJSON(request.Extra),
+		request.TemplateType,
+		nullableString(string(stepsJSON)),
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create knowledge item")
@@ -279,8 +320,23 @@ func (handler *Handler) UpdateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 	}
 
 	request.normalize()
+	if request.TemplateType == "" {
+		request.TemplateType = "article"
+	}
+	if !isValidTemplateType(request.TemplateType) {
+		writeError(w, http.StatusBadRequest, "invalid template_type")
+		return
+	}
 	if request.Title == "" || request.Category == "" {
 		writeError(w, http.StatusBadRequest, "title and category are required")
+		return
+	}
+	if request.TemplateType == "article" && request.Content == "" {
+		writeError(w, http.StatusBadRequest, "content is required for article template")
+		return
+	}
+	if request.TemplateType == "procedure" && len(request.Steps) == 0 {
+		writeError(w, http.StatusBadRequest, "steps are required for procedure template")
 		return
 	}
 
@@ -294,10 +350,16 @@ func (handler *Handler) UpdateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	stepsJSON, err := json.Marshal(request.Steps)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid steps")
+		return
+	}
+
 	result, err := handler.store.DB().ExecContext(
 		r.Context(),
 		`UPDATE knowledge_items
-		 SET title = ?, category = ?, sub_category = ?, tags = ?, summary = ?, content = ?, notes = ?, reference_url = ?, extra = ?
+		 SET title = ?, category = ?, sub_category = ?, tags = ?, summary = ?, content = ?, notes = ?, reference_url = ?, extra = ?, template_type = ?, steps = ?
 		 WHERE id = ? AND user_id = ?`,
 		request.Title,
 		request.Category,
@@ -308,6 +370,8 @@ func (handler *Handler) UpdateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 		nullableString(request.Notes),
 		nullableString(request.ReferenceURL),
 		nullableJSON(request.Extra),
+		request.TemplateType,
+		nullableString(string(stepsJSON)),
 		itemID,
 		userID,
 	)
@@ -374,12 +438,67 @@ func (handler *Handler) DeleteKnowledgeItem(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// MoveCategoryRequest 批量迁移分类请求体
+type MoveCategoryRequest struct {
+	OldCategory string `json:"old_category"`
+	NewCategory string `json:"new_category"`
+}
+
+// MoveCategory 将当前用户某分类下的所有知识条目批量迁移到另一分类
+// 用于删除自定义分类时,将其下条目移动到"其他"等默认分类
+func (handler *Handler) MoveCategory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	userID, ok := currentUserID(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing authenticated user")
+		return
+	}
+
+	var request MoveCategoryRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	request.OldCategory = strings.TrimSpace(request.OldCategory)
+	request.NewCategory = strings.TrimSpace(request.NewCategory)
+
+	if request.OldCategory == "" || request.NewCategory == "" {
+		writeError(w, http.StatusBadRequest, "old_category and new_category are required")
+		return
+	}
+	if !isValidCategory(request.OldCategory) || !isValidCategory(request.NewCategory) {
+		writeError(w, http.StatusBadRequest, "invalid category")
+		return
+	}
+
+	_, err := handler.store.DB().ExecContext(
+		r.Context(),
+		`UPDATE knowledge_items
+		 SET category = ?, updated_at = ?
+		 WHERE user_id = ? AND category = ?`,
+		request.NewCategory,
+		time.Now(),
+		userID,
+		request.OldCategory,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to move knowledge items category")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // findKnowledgeDetail 查询单条知识详情
 func (handler *Handler) findKnowledgeDetail(r *http.Request, userID int64, itemID int64) (KnowledgeDetail, error) {
 	var record knowledgeRecord
 	row := handler.store.DB().QueryRowContext(
 		r.Context(),
-		`SELECT id, title, category, sub_category, tags, summary, content, notes, reference_url, extra, created_at, updated_at
+		`SELECT id, title, category, sub_category, tags, summary, content, notes, reference_url, extra, template_type, steps, created_at, updated_at
 		 FROM knowledge_items
 		 WHERE id = ? AND user_id = ?
 		 LIMIT 1`,
@@ -387,7 +506,7 @@ func (handler *Handler) findKnowledgeDetail(r *http.Request, userID int64, itemI
 		userID,
 	)
 
-	if err := row.Scan(&record.ID, &record.Title, &record.Category, &record.SubCategory, &record.Tags, &record.Summary, &record.Content, &record.Notes, &record.ReferenceURL, &record.Extra, &record.CreatedAt, &record.UpdatedAt); err != nil {
+	if err := row.Scan(&record.ID, &record.Title, &record.Category, &record.SubCategory, &record.Tags, &record.Summary, &record.Content, &record.Notes, &record.ReferenceURL, &record.Extra, &record.TemplateType, &record.Steps, &record.CreatedAt, &record.UpdatedAt); err != nil {
 		return KnowledgeDetail{}, err
 	}
 
@@ -417,6 +536,12 @@ func (request *KnowledgeRequest) normalize() {
 	request.Notes = strings.TrimSpace(request.Notes)
 	request.ReferenceURL = strings.TrimSpace(request.ReferenceURL)
 	request.Extra = strings.TrimSpace(request.Extra)
+	request.TemplateType = strings.TrimSpace(request.TemplateType)
+	for i := range request.Steps {
+		request.Steps[i].Title = strings.TrimSpace(request.Steps[i].Title)
+		request.Steps[i].Code = strings.TrimSpace(request.Steps[i].Code)
+		request.Steps[i].Note = strings.TrimSpace(request.Steps[i].Note)
+	}
 }
 
 // validateExtra 校验 extra 字段必须是合法 JSON 或空字符串
@@ -431,17 +556,30 @@ func (request *KnowledgeRequest) validateExtra() error {
 	return nil
 }
 
+// parseSteps 将 JSON 字符串解析为步骤列表
+func parseSteps(stepsJSON sql.NullString) []ProcedureStep {
+	if !stepsJSON.Valid || stepsJSON.String == "" {
+		return nil
+	}
+	var steps []ProcedureStep
+	if err := json.Unmarshal([]byte(stepsJSON.String), &steps); err != nil {
+		return nil
+	}
+	return steps
+}
+
 // summary 将数据库记录转换为列表摘要
 func (record knowledgeRecord) summary() KnowledgeSummary {
 	return KnowledgeSummary{
-		ID:          record.ID,
-		Title:       record.Title,
-		Category:    record.Category,
-		SubCategory: nullStringValue(record.SubCategory),
-		Tags:        nullStringValue(record.Tags),
-		Summary:     nullStringValue(record.Summary),
-		CreatedAt:   record.CreatedAt,
-		UpdatedAt:   record.UpdatedAt,
+		ID:           record.ID,
+		Title:        record.Title,
+		Category:     record.Category,
+		SubCategory:  nullStringValue(record.SubCategory),
+		Tags:         nullStringValue(record.Tags),
+		Summary:      nullStringValue(record.Summary),
+		TemplateType: record.TemplateType,
+		CreatedAt:    record.CreatedAt,
+		UpdatedAt:    record.UpdatedAt,
 	}
 }
 
@@ -453,6 +591,7 @@ func (record knowledgeRecord) detail() KnowledgeDetail {
 		Notes:            nullStringValue(record.Notes),
 		ReferenceURL:     nullStringValue(record.ReferenceURL),
 		Extra:            nullStringValue(record.Extra),
+		Steps:            parseSteps(record.Steps),
 	}
 }
 

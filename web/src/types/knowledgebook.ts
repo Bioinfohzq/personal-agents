@@ -9,6 +9,21 @@ export const KNOWLEDGE_CATEGORIES = [
 
 export type KnowledgeCategory = string;
 
+// 模板类型
+export type TemplateType = 'article' | 'procedure';
+
+// 流程模板单步骤
+export interface ProcedureStep {
+  title: string;
+  code?: string;
+  note?: string;
+}
+
+// 模板类型中文标签
+export function getTemplateTypeLabel(type: TemplateType): string {
+  return type === 'procedure' ? '流程模板' : '文章模板';
+}
+
 // 自定义分类(用户通过"添加分类"创建)的 localStorage key
 const CUSTOM_CATEGORIES_KEY = 'knowledgebook.custom-categories';
 
@@ -101,6 +116,7 @@ export interface KnowledgeSummary {
   sub_category?: string;
   tags?: string;
   summary?: string;
+  template_type: TemplateType;
   created_at: string;
   updated_at: string;
 }
@@ -111,6 +127,7 @@ export interface KnowledgeDetail extends KnowledgeSummary {
   notes?: string;
   reference_url?: string;
   extra?: string;
+  steps?: ProcedureStep[];
 }
 
 // 创建/更新知识的请求体
@@ -124,6 +141,8 @@ export interface KnowledgeInput {
   notes: string;
   reference_url: string;
   extra: string;
+  template_type: TemplateType;
+  steps: ProcedureStep[];
 }
 
 // 空表单初始值
@@ -137,18 +156,21 @@ export const emptyKnowledgeForm: KnowledgeInput = {
   notes: '',
   reference_url: '',
   extra: '',
+  template_type: 'article',
+  steps: [],
 };
 
 // AI 解析请求
 export interface ParseAIRequest {
   raw_text: string;
   category: KnowledgeCategory;
+  template_type: TemplateType;
 }
 
 // AI 解析结果
 export interface ParseAIResponse {
   title: string;
-  category: KnowledgeCategory;
+  category: string;
   sub_category: string;
   tags: string;
   summary: string;
@@ -156,6 +178,8 @@ export interface ParseAIResponse {
   notes: string;
   reference_url: string;
   extra: string;
+  template_type: TemplateType;
+  steps: ProcedureStep[];
 }
 
 // 根据分类值获取中文标签

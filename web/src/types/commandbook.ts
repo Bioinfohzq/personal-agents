@@ -11,6 +11,21 @@ export const COMMAND_CATEGORIES = [
 
 export type CommandCategory = string;
 
+// 模板类型
+export type TemplateType = 'article' | 'procedure';
+
+// 流程模板单步骤
+export interface ProcedureStep {
+  title: string;
+  code?: string;
+  note?: string;
+}
+
+// 模板类型中文标签
+export function getTemplateTypeLabel(type: TemplateType): string {
+  return type === 'procedure' ? '流程模板' : '单条命令';
+}
+
 // 自定义分类(用户通过"添加分类"创建)的 localStorage key
 const CUSTOM_CATEGORIES_KEY = 'commandbook.custom-categories';
 
@@ -64,17 +79,19 @@ export interface CommandSummary {
   command_text: string;
   category: string;
   sub_category?: string;
+  template_type: TemplateType;
   created_at: string;
   updated_at: string;
 }
 
-// 命令详情(含 introduction / parameters / scenarios / notes)
+// 命令详情(含 introduction / parameters / scenarios / notes / steps)
 export interface CommandDetail extends CommandSummary {
   introduction?: string;     // 详细介绍
   parameters?: string;       // 多行文本,每行格式 "参数|全称|含义"
   scenarios?: string;        // 使用场景,多行文本,每个场景两行(描述 + 示例命令)
   notes?: string;            // 我的理解(个人笔记)
   reference_url?: string;    // 官方文档/教程资源链接
+  steps?: ProcedureStep[];   // 流程模板步骤列表
 }
 
 // 创建/更新命令的请求体
@@ -82,6 +99,7 @@ export interface CommandDetail extends CommandSummary {
 // title 字段合并了"标题"和"一句话含义",所以没有独立的 description 字段。
 // parameters 为三级参数说明,多行文本,每行格式 "参数|全称|含义"(如 "-s|--summarize|只显示总计")。
 // introduction 为详细介绍(官方/通用说明),notes 为个人理解(我的笔记)。
+// template_type 为模板类型: article=单条命令, procedure=流程模板; steps 为流程模板步骤列表。
 export interface CommandInput {
   title: string;
   command_text: string;
@@ -92,6 +110,8 @@ export interface CommandInput {
   scenarios: string;
   notes: string;
   reference_url: string;
+  template_type: TemplateType;
+  steps: ProcedureStep[];
 }
 
 // 空表单初始值
@@ -105,12 +125,15 @@ export const emptyCommandForm: CommandInput = {
   scenarios: '',
   notes: '',
   reference_url: '',
+  template_type: 'article',
+  steps: [],
 };
 
 // AI 解析请求
 export interface ParseAIRequest {
   raw_text: string;
   category: string;
+  template_type: TemplateType;
 }
 
 // AI 解析结果
@@ -124,6 +147,8 @@ export interface ParseAIResponse {
   scenarios: string;
   notes: string;
   reference_url: string;
+  template_type: TemplateType;
+  steps: ProcedureStep[];
 }
 
 // 根据分类值获取中文标签

@@ -23,6 +23,7 @@ import {
   deleteKnowledgeItem,
   getKnowledgeItem,
   listKnowledgeItems,
+  moveKnowledgeItemsCategory,
   parseKnowledgeAI,
   updateKnowledgeItem,
 } from '../../api/knowledgebook';
@@ -34,6 +35,7 @@ import {
   getCategoryLabel as getKnowledgeCategoryLabel,
   getRiskColor,
   getRiskLabel,
+  getTemplateTypeLabel,
   loadCustomCategories,
   parseExtra,
   parseKeySpecs,
@@ -51,7 +53,9 @@ import type {
   KnowledgeExtra,
   KnowledgeInput,
   KnowledgeSummary,
+  ProcedureStep,
   SystemPathExtra,
+  TemplateType,
   UrlResourceExtra,
 } from '../../types/knowledgebook';
 
@@ -250,6 +254,8 @@ export function KnowledgebookPage() {
       notes: selectedDetail.notes ?? '',
       reference_url: selectedDetail.reference_url ?? '',
       extra: selectedDetail.extra ?? '',
+      template_type: selectedDetail.template_type,
+      steps: selectedDetail.steps ?? [],
     });
     setDrawerError(null);
     resetAIState();
@@ -284,6 +290,7 @@ export function KnowledgebookPage() {
       const result = await parseKnowledgeAI(token, {
         raw_text: rawText,
         category: formValues.category,
+        template_type: formValues.template_type,
       });
 
       setFormValues((prev) => ({
@@ -297,6 +304,8 @@ export function KnowledgebookPage() {
         notes: result.notes || prev.notes,
         reference_url: result.reference_url || prev.reference_url,
         extra: result.extra || prev.extra,
+        template_type: result.template_type || prev.template_type,
+        steps: result.steps && result.steps.length > 0 ? result.steps : prev.steps,
       }));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'AI 解析失败';
@@ -313,6 +322,14 @@ export function KnowledgebookPage() {
       setDrawerError('标题和分类都是必填项');
       return;
     }
+    if (formValues.template_type === 'article' && !formValues.content.trim()) {
+      setDrawerError('文章模板下,详细介绍是必填项');
+      return;
+    }
+    if (formValues.template_type === 'procedure' && formValues.steps.length === 0) {
+      setDrawerError('流程模板下,至少需要添加一个步骤');
+      return;
+    }
 
     setIsSubmitting(true);
     setDrawerError(null);
@@ -327,6 +344,8 @@ export function KnowledgebookPage() {
       notes: formValues.notes.trim(),
       reference_url: formValues.reference_url.trim(),
       extra: formValues.extra.trim(),
+      template_type: formValues.template_type,
+      steps: formValues.steps,
     };
 
     try {
@@ -368,6 +387,53 @@ export function KnowledgebookPage() {
       handleApiError(deleteError, '删除失败', setDrawerError);
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  // 从列表卡片删除知识条目
+  async function handleDeleteItemFromList(item: KnowledgeSummary, event: React.MouseEvent) {
+    event.stopPropagation();
+    const confirmed = window.confirm(`确定删除知识「${item.title}」吗？`);
+    if (!confirmed) return;
+
+    try {
+      await deleteKnowledgeItem(token, item.id);
+      await loadItems(selectedCategory, searchKeyword);
+      await loadCategoryCounts();
+      if (selectedSummary?.id === item.id) {
+        closeDrawer();
+      }
+    } catch (deleteError) {
+      handleApiError(deleteError, '删除失败', setListError);
+    }
+  }
+
+  // 删除自定义分类:将其下知识条目移动到"其他"
+  async function handleDeleteCategory(category: CustomCategory, event: React.MouseEvent) {
+    event.stopPropagation();
+    const count = categoryCounts.get(category.value) ?? 0;
+    const confirmed = window.confirm(
+      `确定删除分类「${category.label}」吗？该分类下的 ${count} 条知识将移动到「其他」分类。`,
+    );
+    if (!confirmed) return;
+
+    try {
+      if (count > 0) {
+        await moveKnowledgeItemsCategory(token, category.value, 'other');
+      }
+      const next = customCategories.filter((item) => item.value !== category.value);
+      setCustomCategories(next);
+      saveCustomCategories(next);
+      if (selectedCategory === category.value) {
+        setSelectedCategory('');
+        setDrawerMode(null);
+        setSelectedSummary(null);
+        setSelectedDetail(null);
+      }
+      await loadItems(selectedCategory === category.value ? '' : selectedCategory, searchKeyword);
+      await loadCategoryCounts();
+    } catch (deleteError) {
+      handleApiError(deleteError, '删除分类失败', setListError);
     }
   }
 
@@ -525,7 +591,7 @@ export function KnowledgebookPage() {
           <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-0.5">
             <CategoryItem
               label="全部"
-              count={items.length}
+              count={allItems.length}
               active={selectedCategory === ''}
               onClick={() => handleSelectCategory('')}
             />
@@ -535,7 +601,9 @@ export function KnowledgebookPage() {
                 label={item.label}
                 count={categoryCounts.get(item.value) ?? 0}
                 active={selectedCategory === item.value}
+                deletable={customCategories.some((custom) => custom.value === item.value)}
                 onClick={() => handleSelectCategory(item.value)}
+                onDelete={(event) => void handleDeleteCategory(item, event)}
               />
             ))}
           </div>
@@ -573,17 +641,44 @@ export function KnowledgebookPage() {
                     key={item.id}
                     type="button"
                     onClick={() => void openItemDetail(item)}
-                    className={`w-full text-left rounded-xl border p-3 transition-colors hover:border-indigo-300 hover:bg-indigo-50/40 ${
+                    className={`group relative w-full text-left rounded-xl border p-3 transition-colors hover:border-indigo-300 hover:bg-indigo-50/40 ${
                       selectedSummary?.id === item.id
                         ? 'border-indigo-300 bg-indigo-50'
                         : 'border-gray-200'
                     }`}
                   >
-                    <div className="flex items-center justify-between gap-2">
+                    {/* 删除按钮:悬停显示 */}
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(event) => void handleDeleteItemFromList(item, event)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          void handleDeleteItemFromList(item, event as unknown as React.MouseEvent);
+                        }
+                      }}
+                      title="删除知识"
+                      className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 focus:opacity-100 rounded p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-opacity"
+                    >
+                      <Trash2 size={14} />
+                    </span>
+                    <div className="flex items-center justify-between gap-2 pr-7">
                       <span className="text-sm font-semibold text-gray-900 truncate">
                         {item.title}
                       </span>
-                      <KnowledgeCategoryBadge value={item.category} />
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span
+                          className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                            item.template_type === 'procedure'
+                              ? 'bg-purple-50 text-purple-600'
+                              : 'bg-blue-50 text-blue-600'
+                          }`}
+                        >
+                          {getTemplateTypeLabel(item.template_type)}
+                        </span>
+                        <KnowledgeCategoryBadge value={item.category} />
+                      </div>
                     </div>
                     {item.summary && (
                       <div className="mt-1.5 text-xs text-gray-500 line-clamp-2">
@@ -720,21 +815,42 @@ function CategoryItem(props: {
   label: string;
   count: number;
   active: boolean;
+  deletable?: boolean;
   onClick: () => void;
+  onDelete?: (event: React.MouseEvent) => void;
 }) {
   return (
     <button
       type="button"
       onClick={props.onClick}
-      className={`w-full flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors ${
+      className={`group w-full flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors ${
         props.active
           ? 'bg-indigo-50 text-indigo-700 font-medium'
           : 'text-gray-700 hover:bg-gray-50'
       }`}
     >
       <span>{props.label}</span>
-      <span className={`text-xs ${props.active ? 'text-indigo-500' : 'text-gray-400'}`}>
-        {props.count}
+      <span className="flex items-center gap-1.5">
+        <span className={`text-xs ${props.active ? 'text-indigo-500' : 'text-gray-400'}`}>
+          {props.count}
+        </span>
+        {props.deletable && props.onDelete && (
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={props.onDelete}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                props.onDelete?.(event as unknown as React.MouseEvent);
+              }
+            }}
+            title="删除分类"
+            className="opacity-0 group-hover:opacity-100 focus:opacity-100 rounded p-0.5 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-opacity"
+          >
+            <Trash2 size={14} />
+          </span>
+        )}
       </span>
     </button>
   );
@@ -766,6 +882,15 @@ function KnowledgeDetailView(props: {
               {detail.sub_category}
             </span>
           )}
+          <span
+            className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+              detail.template_type === 'procedure'
+                ? 'bg-purple-50 text-purple-600'
+                : 'bg-blue-50 text-blue-600'
+            }`}
+          >
+            {getTemplateTypeLabel(detail.template_type)}
+          </span>
         </div>
         <h3 className="text-lg font-semibold text-gray-900 break-all">
           {detail.title}
@@ -775,6 +900,45 @@ function KnowledgeDetailView(props: {
       {detail.summary && (
         <div className="text-sm text-gray-700 bg-blue-50 rounded-lg p-3 border border-blue-100">
           {detail.summary}
+        </div>
+      )}
+
+      {/* 流程步骤 */}
+      {detail.template_type === 'procedure' && detail.steps && detail.steps.length > 0 && (
+        <div>
+          <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">流程步骤</div>
+          <div className="space-y-3">
+            {detail.steps.map((step, idx) => (
+              <div key={idx} className="rounded-lg border border-purple-100 bg-purple-50/50 p-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="shrink-0 rounded bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700">
+                    步骤{idx + 1}
+                  </span>
+                  <span className="text-sm font-medium text-gray-900">{step.title}</span>
+                </div>
+                {step.code && (
+                  <div className="flex items-center justify-between gap-2">
+                    <pre className="flex-1 font-mono text-xs text-gray-800 bg-white rounded px-2 py-1.5 whitespace-pre-wrap break-all">
+                      {step.code}
+                    </pre>
+                    <button
+                      type="button"
+                      onClick={() => onCopy(step.code!)}
+                      className="shrink-0 inline-flex items-center gap-1 text-xs text-purple-600 hover:text-purple-700"
+                    >
+                      <Copy size={12} />
+                      复制
+                    </button>
+                  </div>
+                )}
+                {step.note && (
+                  <div className="text-sm text-gray-700 whitespace-pre-wrap break-words">
+                    {step.note}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -1119,6 +1283,19 @@ function KnowledgeForm(props: {
         </button>
       </div>
 
+      {/* 模板类型 */}
+      <label className="block">
+        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">模板类型</span>
+        <select
+          value={values.template_type}
+          onChange={(e) => updateField('template_type', e.target.value as TemplateType)}
+          className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+        >
+          <option value="article">文章模板</option>
+          <option value="procedure">流程模板</option>
+        </select>
+      </label>
+
       {/* 标题 */}
       <label className="block">
         <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">标题 / 一句话说明</span>
@@ -1189,20 +1366,29 @@ function KnowledgeForm(props: {
         />
       </label>
 
-      {/* 类型专属字段 */}
-      <ExtraFieldsEditor category={values.category} extra={values.extra} onChange={updateExtra} />
+      {values.template_type === 'article' ? (
+        <>
+          {/* 类型专属字段 */}
+          <ExtraFieldsEditor category={values.category} extra={values.extra} onChange={updateExtra} />
 
-      {/* 详细介绍 */}
-      <label className="block">
-        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">详细介绍</span>
-        <textarea
-          value={values.content}
-          onChange={(e) => updateField('content', e.target.value)}
-          placeholder="知识点的完整说明、背景、注意事项..."
-          rows={5}
-          className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          {/* 详细介绍 */}
+          <label className="block">
+            <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">详细介绍</span>
+            <textarea
+              value={values.content}
+              onChange={(e) => updateField('content', e.target.value)}
+              placeholder="知识点的完整说明、背景、注意事项..."
+              rows={5}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+          </label>
+        </>
+      ) : (
+        <ProcedureStepEditor
+          value={values.steps}
+          onChange={(v) => updateField('steps', v)}
         />
-      </label>
+      )}
 
       {/* 我的理解 */}
       <label className="block">
@@ -1546,6 +1732,98 @@ function AlgorithmExtraEditor(props: {
           className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-mono focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
       </label>
+    </div>
+  );
+}
+
+/** 流程步骤编辑器 */
+function ProcedureStepEditor(props: {
+  value: ProcedureStep[];
+  onChange: (value: ProcedureStep[]) => void;
+}) {
+  const { value, onChange } = props;
+  const [steps, setSteps] = useState<ProcedureStep[]>(() => value);
+
+  useEffect(() => {
+    setSteps(value);
+  }, [value]);
+
+  function updateSteps(next: ProcedureStep[]) {
+    setSteps(next);
+    onChange(next);
+  }
+
+  function updateStep(index: number, patch: Partial<ProcedureStep>) {
+    const next = steps.map((s, idx) => (idx === index ? { ...s, ...patch } : s));
+    updateSteps(next);
+  }
+
+  function addStep() {
+    updateSteps([...steps, { title: '', code: '', note: '' }]);
+  }
+
+  function removeStep(index: number) {
+    const next = steps.filter((_, idx) => idx !== index);
+    updateSteps(next.length > 0 ? next : [{ title: '', code: '', note: '' }]);
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">流程步骤</span>
+        <button
+          type="button"
+          onClick={addStep}
+          className="inline-flex items-center gap-1 rounded-lg border border-purple-200 px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50"
+        >
+          <Plus size={12} />
+          添加步骤
+        </button>
+      </div>
+
+      {steps.map((step, index) => (
+        <div
+          key={index}
+          className="rounded-lg border border-gray-200 bg-white p-3 space-y-2"
+        >
+          <div className="flex items-start gap-2">
+            <span className="shrink-0 pt-2 text-xs font-medium text-purple-700">
+              步骤{index + 1}：
+            </span>
+            <input
+              type="text"
+              value={step.title}
+              onChange={(e) => updateStep(index, { title: e.target.value })}
+              placeholder="步骤标题"
+              className="flex-1 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+            {steps.length > 1 && (
+              <button
+                type="button"
+                onClick={() => removeStep(index)}
+                className="shrink-0 rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                title="删除步骤"
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
+          </div>
+          <textarea
+            value={step.code}
+            onChange={(e) => updateStep(index, { code: e.target.value })}
+            placeholder="该步骤的命令或代码(可选)"
+            rows={3}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          />
+          <textarea
+            value={step.note}
+            onChange={(e) => updateStep(index, { note: e.target.value })}
+            placeholder="补充说明或注意事项(可选)"
+            rows={2}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          />
+        </div>
+      ))}
     </div>
   );
 }

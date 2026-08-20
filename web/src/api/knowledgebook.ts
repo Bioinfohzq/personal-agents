@@ -73,6 +73,20 @@ export async function deleteKnowledgeItem(token: string, itemId: number): Promis
   await assertBusinessResponse(response, '删除知识失败');
 }
 
+// moveKnowledgeItemsCategory 批量迁移分类
+// 用于删除自定义分类时,将其下所有知识条目移动到新的默认分类(如 other)
+export async function moveKnowledgeItemsCategory(
+  token: string,
+  oldCategory: string,
+  newCategory: string,
+): Promise<void> {
+  const response = await businessFetch(token, '/api/v1/knowledge/category', {
+    method: 'PUT',
+    body: JSON.stringify({ old_category: oldCategory, new_category: newCategory }),
+  });
+  await assertBusinessResponse(response, '迁移分类失败');
+}
+
 // parseKnowledgeAI 智能解析 AI 解释文本并预填知识字段
 export async function parseKnowledgeAI(
   token: string,

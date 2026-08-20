@@ -26,6 +26,18 @@ func isValidCategory(category string) bool {
 	return !strings.ContainsAny(category, " \t\r\n")
 }
 
+// isValidTemplateType 校验模板类型
+func isValidTemplateType(templateType string) bool {
+	return templateType == "article" || templateType == "procedure"
+}
+
+// ProcedureStep 流程模板单步骤
+type ProcedureStep struct {
+	Title string `json:"title"`
+	Code  string `json:"code,omitempty"`
+	Note  string `json:"note,omitempty"`
+}
+
 // Handler 命令手册 HTTP 处理器
 type Handler struct {
 	store *database.Store
@@ -37,37 +49,42 @@ type Handler struct {
 // title 字段合并了"标题"和"一句话含义",所以没有独立的 description 字段。
 // parameters 为三级参数说明,多行文本,每行格式 "参数|全称|含义"(如 "-s|--summarize|只显示总计")。
 // introduction 为命令的详细介绍(官方/通用说明),notes 为个人理解(我的笔记)。
+// template_type 为模板类型: article=单条命令, procedure=流程模板; steps 为流程模板步骤列表。
 type CommandRequest struct {
-	Title        string `json:"title"`
-	CommandText  string `json:"command_text"`
-	Category     string `json:"category"`
-	SubCategory  string `json:"sub_category"`
-	Introduction string `json:"introduction"`
-	Parameters   string `json:"parameters"`
-	Scenarios    string `json:"scenarios"`
-	Notes        string `json:"notes"`
-	ReferenceURL string `json:"reference_url"`
+	Title        string          `json:"title"`
+	CommandText  string          `json:"command_text"`
+	Category     string          `json:"category"`
+	SubCategory  string          `json:"sub_category"`
+	Introduction string          `json:"introduction"`
+	Parameters   string          `json:"parameters"`
+	Scenarios    string          `json:"scenarios"`
+	Notes        string          `json:"notes"`
+	ReferenceURL string          `json:"reference_url"`
+	TemplateType string          `json:"template_type"`
+	Steps        []ProcedureStep `json:"steps"`
 }
 
 // CommandSummary 命令摘要(列表用,不含 introduction / parameters / notes 正文)
 type CommandSummary struct {
-	ID          int64     `json:"id"`
-	Title       string    `json:"title"`
-	CommandText string    `json:"command_text"`
-	Category    string    `json:"category"`
-	SubCategory string    `json:"sub_category,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID           int64     `json:"id"`
+	Title        string    `json:"title"`
+	CommandText  string    `json:"command_text"`
+	Category     string    `json:"category"`
+	SubCategory  string    `json:"sub_category,omitempty"`
+	TemplateType string    `json:"template_type"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // CommandDetail 命令详情(含 introduction / parameters / notes)
 type CommandDetail struct {
 	CommandSummary
-	Introduction string `json:"introduction,omitempty"`
-	Parameters   string `json:"parameters,omitempty"`
-	Scenarios    string `json:"scenarios,omitempty"`
-	Notes        string `json:"notes,omitempty"`
-	ReferenceURL string `json:"reference_url,omitempty"`
+	Introduction string          `json:"introduction,omitempty"`
+	Parameters   string          `json:"parameters,omitempty"`
+	Scenarios    string          `json:"scenarios,omitempty"`
+	Notes        string          `json:"notes,omitempty"`
+	ReferenceURL string          `json:"reference_url,omitempty"`
+	Steps        []ProcedureStep `json:"steps,omitempty"`
 }
 
 // commandRecord 数据库行映射结构体(可空字段用 sql.NullString)
@@ -82,6 +99,8 @@ type commandRecord struct {
 	Scenarios    sql.NullString
 	Notes        sql.NullString
 	ReferenceURL sql.NullString
+	TemplateType string
+	Steps        sql.NullString
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -147,7 +166,7 @@ func (handler *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := handler.store.DB().QueryContext(
 		r.Context(),
-		`SELECT id, title, command_text, category, sub_category, created_at, updated_at
+		`SELECT id, title, command_text, category, sub_category, template_type, created_at, updated_at
 		 FROM commands
 		 WHERE user_id = ?
 		   AND (? = '' OR category = ?)
@@ -166,7 +185,7 @@ func (handler *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
 	commands := make([]CommandSummary, 0)
 	for rows.Next() {
 		var record commandRecord
-		if err := rows.Scan(&record.ID, &record.Title, &record.CommandText, &record.Category, &record.SubCategory, &record.CreatedAt, &record.UpdatedAt); err != nil {
+		if err := rows.Scan(&record.ID, &record.Title, &record.CommandText, &record.Category, &record.SubCategory, &record.TemplateType, &record.CreatedAt, &record.UpdatedAt); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read command")
 			return
 		}
@@ -197,8 +216,23 @@ func (handler *Handler) CreateCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	request.normalize()
-	if request.Title == "" || request.CommandText == "" || request.Category == "" {
-		writeError(w, http.StatusBadRequest, "title, command_text and category are required")
+	if request.TemplateType == "" {
+		request.TemplateType = "article"
+	}
+	if !isValidTemplateType(request.TemplateType) {
+		writeError(w, http.StatusBadRequest, "invalid template_type")
+		return
+	}
+	if request.Title == "" || request.Category == "" {
+		writeError(w, http.StatusBadRequest, "title and category are required")
+		return
+	}
+	if request.TemplateType == "article" && request.CommandText == "" {
+		writeError(w, http.StatusBadRequest, "command_text is required for article template")
+		return
+	}
+	if request.TemplateType == "procedure" && len(request.Steps) == 0 {
+		writeError(w, http.StatusBadRequest, "steps are required for procedure template")
 		return
 	}
 
@@ -207,10 +241,16 @@ func (handler *Handler) CreateCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	stepsJSON, err := json.Marshal(request.Steps)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid steps")
+		return
+	}
+
 	result, err := handler.store.DB().ExecContext(
 		r.Context(),
-		`INSERT INTO commands (user_id, title, command_text, category, sub_category, introduction, parameters, scenarios, notes, reference_url)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO commands (user_id, title, command_text, category, sub_category, introduction, parameters, scenarios, notes, reference_url, template_type, steps)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		userID,
 		request.Title,
 		request.CommandText,
@@ -221,6 +261,8 @@ func (handler *Handler) CreateCommand(w http.ResponseWriter, r *http.Request) {
 		nullableString(request.Scenarios),
 		nullableString(request.Notes),
 		nullableString(request.ReferenceURL),
+		request.TemplateType,
+		nullableString(string(stepsJSON)),
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create command")
@@ -278,8 +320,23 @@ func (handler *Handler) UpdateCommand(w http.ResponseWriter, r *http.Request, co
 	}
 
 	request.normalize()
-	if request.Title == "" || request.CommandText == "" || request.Category == "" {
-		writeError(w, http.StatusBadRequest, "title, command_text and category are required")
+	if request.TemplateType == "" {
+		request.TemplateType = "article"
+	}
+	if !isValidTemplateType(request.TemplateType) {
+		writeError(w, http.StatusBadRequest, "invalid template_type")
+		return
+	}
+	if request.Title == "" || request.Category == "" {
+		writeError(w, http.StatusBadRequest, "title and category are required")
+		return
+	}
+	if request.TemplateType == "article" && request.CommandText == "" {
+		writeError(w, http.StatusBadRequest, "command_text is required for article template")
+		return
+	}
+	if request.TemplateType == "procedure" && len(request.Steps) == 0 {
+		writeError(w, http.StatusBadRequest, "steps are required for procedure template")
 		return
 	}
 
@@ -288,10 +345,16 @@ func (handler *Handler) UpdateCommand(w http.ResponseWriter, r *http.Request, co
 		return
 	}
 
+	stepsJSON, err := json.Marshal(request.Steps)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid steps")
+		return
+	}
+
 	result, err := handler.store.DB().ExecContext(
 		r.Context(),
 		`UPDATE commands
-		 SET title = ?, command_text = ?, category = ?, sub_category = ?, introduction = ?, parameters = ?, scenarios = ?, notes = ?, reference_url = ?
+		 SET title = ?, command_text = ?, category = ?, sub_category = ?, introduction = ?, parameters = ?, scenarios = ?, notes = ?, reference_url = ?, template_type = ?, steps = ?
 		 WHERE id = ? AND user_id = ?`,
 		request.Title,
 		request.CommandText,
@@ -302,6 +365,8 @@ func (handler *Handler) UpdateCommand(w http.ResponseWriter, r *http.Request, co
 		nullableString(request.Scenarios),
 		nullableString(request.Notes),
 		nullableString(request.ReferenceURL),
+		request.TemplateType,
+		nullableString(string(stepsJSON)),
 		commandID,
 		userID,
 	)
@@ -368,12 +433,67 @@ func (handler *Handler) DeleteCommand(w http.ResponseWriter, r *http.Request, co
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// findCommandDetail 查询单条命令详情(含 introduction / parameters / notes)
+// MoveCategoryRequest 批量迁移分类请求体
+type MoveCategoryRequest struct {
+	OldCategory string `json:"old_category"`
+	NewCategory string `json:"new_category"`
+}
+
+// MoveCategory 将当前用户某分类下的所有命令批量迁移到另一分类
+// 用于删除自定义分类时,将其下命令移动到"其他"等默认分类
+func (handler *Handler) MoveCategory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	userID, ok := currentUserID(r)
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "missing authenticated user")
+		return
+	}
+
+	var request MoveCategoryRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	request.OldCategory = strings.TrimSpace(request.OldCategory)
+	request.NewCategory = strings.TrimSpace(request.NewCategory)
+
+	if request.OldCategory == "" || request.NewCategory == "" {
+		writeError(w, http.StatusBadRequest, "old_category and new_category are required")
+		return
+	}
+	if !isValidCategory(request.OldCategory) || !isValidCategory(request.NewCategory) {
+		writeError(w, http.StatusBadRequest, "invalid category")
+		return
+	}
+
+	_, err := handler.store.DB().ExecContext(
+		r.Context(),
+		`UPDATE commands
+		 SET category = ?, updated_at = ?
+		 WHERE user_id = ? AND category = ?`,
+		request.NewCategory,
+		time.Now(),
+		userID,
+		request.OldCategory,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to move commands category")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// findCommandDetail 查询单条命令详情(含 introduction / parameters / notes / steps)
 func (handler *Handler) findCommandDetail(r *http.Request, userID int64, commandID int64) (CommandDetail, error) {
 	var record commandRecord
 	row := handler.store.DB().QueryRowContext(
 		r.Context(),
-		`SELECT id, title, command_text, category, sub_category, introduction, parameters, scenarios, notes, reference_url, created_at, updated_at
+		`SELECT id, title, command_text, category, sub_category, introduction, parameters, scenarios, notes, reference_url, template_type, steps, created_at, updated_at
 		 FROM commands
 		 WHERE id = ? AND user_id = ?
 		 LIMIT 1`,
@@ -381,7 +501,7 @@ func (handler *Handler) findCommandDetail(r *http.Request, userID int64, command
 		userID,
 	)
 
-	if err := row.Scan(&record.ID, &record.Title, &record.CommandText, &record.Category, &record.SubCategory, &record.Introduction, &record.Parameters, &record.Scenarios, &record.Notes, &record.ReferenceURL, &record.CreatedAt, &record.UpdatedAt); err != nil {
+	if err := row.Scan(&record.ID, &record.Title, &record.CommandText, &record.Category, &record.SubCategory, &record.Introduction, &record.Parameters, &record.Scenarios, &record.Notes, &record.ReferenceURL, &record.TemplateType, &record.Steps, &record.CreatedAt, &record.UpdatedAt); err != nil {
 		return CommandDetail{}, err
 	}
 
@@ -411,18 +531,37 @@ func (request *CommandRequest) normalize() {
 	request.Scenarios = strings.TrimSpace(request.Scenarios)
 	request.Notes = strings.TrimSpace(request.Notes)
 	request.ReferenceURL = strings.TrimSpace(request.ReferenceURL)
+	request.TemplateType = strings.TrimSpace(request.TemplateType)
+	for i := range request.Steps {
+		request.Steps[i].Title = strings.TrimSpace(request.Steps[i].Title)
+		request.Steps[i].Code = strings.TrimSpace(request.Steps[i].Code)
+		request.Steps[i].Note = strings.TrimSpace(request.Steps[i].Note)
+	}
+}
+
+// parseSteps 将 JSON 字符串解析为步骤列表
+func parseSteps(stepsJSON sql.NullString) []ProcedureStep {
+	if !stepsJSON.Valid || stepsJSON.String == "" {
+		return nil
+	}
+	var steps []ProcedureStep
+	if err := json.Unmarshal([]byte(stepsJSON.String), &steps); err != nil {
+		return nil
+	}
+	return steps
 }
 
 // summary 将数据库记录转换为列表摘要
 func (record commandRecord) summary() CommandSummary {
 	return CommandSummary{
-		ID:          record.ID,
-		Title:       record.Title,
-		CommandText: record.CommandText,
-		Category:    record.Category,
-		SubCategory: nullStringValue(record.SubCategory),
-		CreatedAt:   record.CreatedAt,
-		UpdatedAt:   record.UpdatedAt,
+		ID:           record.ID,
+		Title:        record.Title,
+		CommandText:  record.CommandText,
+		Category:     record.Category,
+		SubCategory:  nullStringValue(record.SubCategory),
+		TemplateType: record.TemplateType,
+		CreatedAt:    record.CreatedAt,
+		UpdatedAt:    record.UpdatedAt,
 	}
 }
 
@@ -435,6 +574,7 @@ func (record commandRecord) detail() CommandDetail {
 		Scenarios:      nullStringValue(record.Scenarios),
 		Notes:          nullStringValue(record.Notes),
 		ReferenceURL:   nullStringValue(record.ReferenceURL),
+		Steps:          parseSteps(record.Steps),
 	}
 }
 

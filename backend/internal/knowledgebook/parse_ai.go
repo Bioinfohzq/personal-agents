@@ -16,21 +16,24 @@ import (
 
 // ParseAIRequest AI 解释文本解析请求
 type ParseAIRequest struct {
-	RawText  string `json:"raw_text"`
-	Category string `json:"category"`
+	RawText      string `json:"raw_text"`
+	Category     string `json:"category"`
+	TemplateType string `json:"template_type"`
 }
 
 // ParseAIResponse AI 解析结果
 type ParseAIResponse struct {
-	Title        string `json:"title"`
-	Category     string `json:"category"`
-	SubCategory  string `json:"sub_category"`
-	Tags         string `json:"tags"`
-	Summary      string `json:"summary"`
-	Content      string `json:"content"`
-	Notes        string `json:"notes"`
-	ReferenceURL string `json:"reference_url"`
-	Extra        string `json:"extra"`
+	Title        string          `json:"title"`
+	Category     string          `json:"category"`
+	SubCategory  string          `json:"sub_category"`
+	Tags         string          `json:"tags"`
+	Summary      string          `json:"summary"`
+	Content      string          `json:"content"`
+	Notes        string          `json:"notes"`
+	ReferenceURL string          `json:"reference_url"`
+	Extra        string          `json:"extra"`
+	TemplateType string          `json:"template_type"`
+	Steps        []ProcedureStep `json:"steps"`
 }
 
 const baseParseAIPrompt = `你是一位知识库整理助手。请根据用户提供的 AI 解释文本,提取并整理成结构化的知识记录。
@@ -128,6 +131,34 @@ const algorithmExtraPrompt = `
 const otherExtraPrompt = `
 当前 category 为 "other"(其他)。extra 字段可为空对象 {},也可以根据文本内容自由补充有意义的键值对。`
 
+const procedurePrompt = `你是一位知识库整理助手。请根据用户提供的 AI 解释文本,提取并整理成一个流程模板(按步骤记录的知识笔记)。
+
+要求:
+1. title: 标题 + 一句话说明,如 "排查 macOS 磁盘空间不足 - 从大到小定位大文件"。
+2. category: 分类,只能是 "system-path" / "url-resource" / "hardware" / "algorithm" / "other" 之一。
+3. sub_category: 二级分类,只能是一个短语。
+4. tags: 标签,多个标签用逗号分隔。
+5. summary: 50 字以内的核心要点。
+6. steps: 流程步骤数组,每个步骤包含 title(步骤标题,必填)、code(该步骤的命令或代码,可选)、note(补充说明,可选)。
+7. notes: 个人理解或记忆要点,从解释文本中提炼最实用的信息。如果没有,可以留空。
+8. reference_url: 如果文本中包含官方文档/教程链接,提取出来;否则留空。
+9. template_type: 固定输出 "procedure"。
+
+只能输出 JSON,不要任何 Markdown 代码块标记,不要额外说明。JSON 字段如下:
+{
+  "title": "",
+  "category": "",
+  "sub_category": "",
+  "tags": "",
+  "summary": "",
+  "steps": [],
+  "notes": "",
+  "reference_url": "",
+  "template_type": "procedure"
+}
+
+以下是用户提供的 AI 解释文本:`
+
 type chatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
@@ -166,13 +197,21 @@ func (handler *Handler) ParseAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.TemplateType == "" {
+		req.TemplateType = "article"
+	}
+	if !isValidTemplateType(req.TemplateType) {
+		writeError(w, http.StatusBadRequest, "invalid template_type")
+		return
+	}
+
 	category := strings.TrimSpace(req.Category)
 	if category != "" && !isValidCategory(category) {
 		writeError(w, http.StatusBadRequest, "invalid category")
 		return
 	}
 
-	result, err := handler.parseWithLLM(r.Context(), req.RawText, category)
+	result, err := handler.parseWithLLM(r.Context(), req.RawText, category, req.TemplateType)
 	if err != nil {
 		slog.Error("parse knowledge with llm failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "parse failed")
@@ -187,7 +226,7 @@ func (handler *Handler) ParseAI(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (handler *Handler) parseWithLLM(ctx context.Context, rawText string, category string) (*ParseAIResponse, error) {
+func (handler *Handler) parseWithLLM(ctx context.Context, rawText string, category string, templateType string) (*ParseAIResponse, error) {
 	resolved, err := config.ResolveLLM(handler.llm)
 	if err != nil {
 		return nil, err
@@ -195,7 +234,7 @@ func (handler *Handler) parseWithLLM(ctx context.Context, rawText string, catego
 
 	endpoint := resolved.ChatEndpoint()
 
-	prompt := buildParsePrompt(category)
+	prompt := buildParsePrompt(category, templateType)
 
 	payload := chatRequest{
 		Model: resolved.Model,
@@ -262,6 +301,8 @@ func (handler *Handler) parseWithLLM(ctx context.Context, rawText string, catego
 		Notes        string          `json:"notes"`
 		ReferenceURL string          `json:"reference_url"`
 		Extra        json.RawMessage `json:"extra"`
+		TemplateType string          `json:"template_type"`
+		Steps        []ProcedureStep `json:"steps"`
 	}
 	if err := json.Unmarshal([]byte(content), &rawResult); err != nil {
 		return nil, fmt.Errorf("failed to parse llm response: %w, content: %s", err, content)
@@ -277,6 +318,16 @@ func (handler *Handler) parseWithLLM(ctx context.Context, rawText string, catego
 		Notes:        strings.TrimSpace(rawResult.Notes),
 		ReferenceURL: strings.TrimSpace(rawResult.ReferenceURL),
 		Extra:        strings.TrimSpace(string(rawResult.Extra)),
+		TemplateType: strings.TrimSpace(rawResult.TemplateType),
+		Steps:        rawResult.Steps,
+	}
+	if result.TemplateType == "" {
+		result.TemplateType = templateType
+	}
+	for i := range result.Steps {
+		result.Steps[i].Title = strings.TrimSpace(result.Steps[i].Title)
+		result.Steps[i].Code = strings.TrimSpace(result.Steps[i].Code)
+		result.Steps[i].Note = strings.TrimSpace(result.Steps[i].Note)
 	}
 
 	// 如果 LLM 没返回 category,默认用用户选择的 category,否则 other
@@ -296,7 +347,11 @@ func (handler *Handler) parseWithLLM(ctx context.Context, rawText string, catego
 	return result, nil
 }
 
-func buildParsePrompt(category string) string {
+func buildParsePrompt(category string, templateType string) string {
+	if templateType == "procedure" {
+		return procedurePrompt
+	}
+
 	var extraPrompt string
 	switch category {
 	case "system-path":
@@ -311,5 +366,5 @@ func buildParsePrompt(category string) string {
 		extraPrompt = otherExtraPrompt
 	}
 
-	return baseParseAIPrompt + extraPrompt
+	return baseParseAIPrompt + "\n9. template_type: 固定输出 \"article\"。\n" + extraPrompt
 }

@@ -49,11 +49,13 @@ func (server *Server) Handler() http.Handler {
 	mux.Handle("/api/v1/schedules/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(scheduleHandler.Schedule)))
 	// 命令手册:记录各类命令及个人理解,支持 ?category=&q= 过滤搜索
 	mux.Handle("/api/v1/commands", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(commandbookHandler.Commands)))
+	mux.Handle("/api/v1/commands/category", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(commandbookHandler.MoveCategory)))
 	mux.Handle("/api/v1/commands/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(commandbookHandler.Command)))
 	// 命令手册:AI 智能解析 AI 解释文本并预填命令字段
 	mux.Handle("/api/v1/commands/parse-ai", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(commandbookHandler.ParseAI)))
 	// 知识库:记录结构化知识点,支持 ?category=&q= 过滤搜索
 	mux.Handle("/api/v1/knowledge", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(knowledgebookHandler.KnowledgeItems)))
+	mux.Handle("/api/v1/knowledge/category", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(knowledgebookHandler.MoveCategory)))
 	mux.Handle("/api/v1/knowledge/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(knowledgebookHandler.KnowledgeItem)))
 	// 知识库:AI 智能解析 AI 解释文本并预填知识字段
 	mux.Handle("/api/v1/knowledge/parse-ai", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(knowledgebookHandler.ParseAI)))
