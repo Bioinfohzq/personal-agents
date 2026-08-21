@@ -1,7 +1,8 @@
 export interface Message {
   id: string;
-  role: 'user' | 'agent';
+  role: 'user' | 'agent' | 'tool';
   content: string;
+  toolName?: string;
   isStreaming?: boolean;
 }
 

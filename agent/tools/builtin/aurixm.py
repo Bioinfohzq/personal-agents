@@ -9,7 +9,7 @@
 
 配置项（.env）:
   AURIXM_IPC_HOST=127.0.0.1
-  AURIXM_IPC_PORT=8080
+  AURIXM_IPC_PORT=8089
   AURIXM_IPC_TOKEN=   # 可选，手机端没配 token 就留空
 """
 
@@ -29,8 +29,11 @@ load_dotenv()
 def _ipc_config() -> tuple[str, str]:
     """从环境变量读取 IPC 地址和 token。"""
     host = os.getenv("AURIXM_IPC_HOST", "127.0.0.1").strip()
-    port = os.getenv("AURIXM_IPC_PORT", "8080").strip()
+    port = os.getenv("AURIXM_IPC_PORT", "8089").strip()
     token = os.getenv("AURIXM_IPC_TOKEN", "").strip()
+    # 防御: 如果 .env 中行内注释被读入 token，截断第一个 # 之前的内容
+    if "#" in token:
+        token = token.split("#")[0].strip()
     base_url = f"http://{host}:{port}"
     return base_url, token
 
@@ -54,7 +57,10 @@ def _ipc_call(argv: list[str], timeout: float = 30.0) -> str:
     payload: dict[str, Any] = {"argv": argv, "caller": "lead-agent"}
 
     try:
-        resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+        # 显式序列化 JSON 并指定 utf-8 编码，避免 ascii 编码异常
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json; charset=utf-8"
+        resp = httpx.post(url, content=body, headers=headers, timeout=timeout)
         return resp.text
     except httpx.ConnectError:
         return json.dumps({
