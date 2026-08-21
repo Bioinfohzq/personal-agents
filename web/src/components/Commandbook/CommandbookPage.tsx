@@ -11,6 +11,7 @@ import type { FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
 import {
   Check,
+  ChevronRight,
   Copy,
   ExternalLink,
   Loader2,
@@ -26,6 +27,7 @@ import {
   deleteCommand,
   getCommand,
   listCommands,
+  moveCommandCategory,
   parseCommandAI,
   updateCommand,
 } from '../../api/commandbook';
@@ -535,8 +537,8 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
   }
 
   // 从列表卡片删除命令
-  async function handleDeleteCommandFromList(cmd: CommandSummary, event: React.MouseEvent) {
-    event.stopPropagation();
+  async function handleDeleteCommandFromList(cmd: CommandSummary, event?: React.MouseEvent) {
+    if (event) event.stopPropagation();
     const confirmed = window.confirm(`确定删除命令「${cmd.title}」吗？`);
     if (!confirmed) return;
 
@@ -549,6 +551,21 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
       }
     } catch (deleteError) {
       handleApiError(deleteError, '删除失败', setListError);
+    }
+  }
+
+  // 移动命令到其他分类
+  async function handleMoveCommandToCategory(cmd: CommandSummary, targetCategoryId: number) {
+    try {
+      await moveCommandCategory(token, cmd.id, targetCategoryId);
+      await loadCommands(selectedCategoryId, searchKeyword);
+      await loadCategoryCounts();
+      if (selectedSummary?.id === cmd.id && selectedDetail) {
+        const updated = await getCommand(token, cmd.id);
+        setSelectedDetail(updated);
+      }
+    } catch (err) {
+      handleApiError(err, '移动分类失败', setListError);
     }
   }
 
@@ -744,61 +761,16 @@ export const CommandbookPage = forwardRef<CommandbookPageRef, CommandbookPagePro
             ) : (
               <div className="space-y-2">
                 {commands.map((cmd) => (
-                  <button
+                  <CommandItemCard
                     key={cmd.id}
-                    type="button"
+                    command={cmd}
+                    isActive={selectedSummary?.id === cmd.id}
+                    category={categoryMap.get(cmd.category_id)}
+                    categories={categories.filter(c => c.id !== cmd.category_id)}
                     onClick={() => void openCommandDetail(cmd)}
-                    className={`group relative w-full text-left rounded-xl border p-3 transition-colors hover:border-indigo-300 hover:bg-indigo-50/40 ${
-                      selectedSummary?.id === cmd.id
-                        ? 'border-indigo-300 bg-indigo-50'
-                        : 'border-gray-200'
-                    }`}
-                  >
-                    {/* 删除按钮:悬停显示 */}
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={(event) => void handleDeleteCommandFromList(cmd, event)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault();
-                          void handleDeleteCommandFromList(cmd, event as unknown as React.MouseEvent);
-                        }
-                      }}
-                      title="删除命令"
-                      className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 focus:opacity-100 rounded p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-opacity"
-                    >
-                      <Trash2 size={14} />
-                    </span>
-                    {/* 第一行:标题(兼含义) + 分类标签 */}
-                    <div className="flex items-center justify-between gap-2 pr-7">
-                      <span className="text-sm font-semibold text-gray-900 truncate">
-                        {cmd.title}
-                      </span>
-                      <CategoryBadge category={categoryMap.get(cmd.category_id)} />
-                    </div>
-                    {/* 第二行:命令文本 / 模板类型 */}
-                    <div className="mt-1.5 flex items-center gap-2">
-                      <span
-                        className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                          cmd.template_type === 'procedure'
-                            ? 'bg-purple-50 text-purple-600'
-                            : 'bg-blue-50 text-blue-600'
-                        }`}
-                      >
-                        {getTemplateTypeLabel(cmd.template_type)}
-                      </span>
-                      <span className="flex-1 font-mono text-xs text-gray-600 bg-gray-50 rounded px-2 py-1 truncate">
-                        {cmd.command_text}
-                      </span>
-                    </div>
-                    {/* 第三行:子分类(二级) */}
-                    {cmd.sub_category && (
-                      <div className="mt-1.5 flex items-center gap-2 text-xs text-gray-500">
-                        <span className="rounded bg-gray-100 px-1.5 py-0.5">{cmd.sub_category}</span>
-                      </div>
-                    )}
-                  </button>
+                    onMoveToCategory={(targetId) => void handleMoveCommandToCategory(cmd, targetId)}
+                    onDelete={() => void handleDeleteCommandFromList(cmd)}
+                  />
                 ))}
               </div>
             )}
@@ -1227,6 +1199,145 @@ function CategoryItem(props: {
               删除分类
             </button>
           )}
+        </div>
+      )}
+    </>
+  );
+}
+
+// 命令记录卡片:支持右键菜单(移动分类/删除)
+function CommandItemCard(props: {
+  command: CommandSummary;
+  isActive: boolean;
+  category?: Category;
+  categories: Category[];
+  onClick: () => void;
+  onMoveToCategory: (targetCategoryId: number) => void;
+  onDelete: () => void;
+}) {
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [moveSubmenuOpen, setMoveSubmenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  function handleContextMenu(e: React.MouseEvent) {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY });
+  }
+
+  function closeMenu() {
+    setContextMenu(null);
+    setMoveSubmenuOpen(false);
+  }
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    function handler(e: PointerEvent) {
+      if (menuRef.current && menuRef.current.contains(e.target as Node)) return;
+      closeMenu();
+    }
+    document.addEventListener('pointerdown', handler);
+    return () => document.removeEventListener('pointerdown', handler);
+  }, [contextMenu]);
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={props.onClick}
+        onContextMenu={handleContextMenu}
+        className={`relative w-full text-left rounded-xl border p-3 transition-colors hover:border-indigo-300 hover:bg-indigo-50/40 ${
+          props.isActive ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200'
+        }`}
+      >
+        {/* 第一行:标题 + 分类标签 */}
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-semibold text-gray-900 truncate">
+            {props.command.title}
+          </span>
+          <CategoryBadge category={props.category} />
+        </div>
+        {/* 第二行:命令文本 / 模板类型 */}
+        <div className="mt-1.5 flex items-center gap-2">
+          <span
+            className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+              props.command.template_type === 'procedure'
+                ? 'bg-purple-50 text-purple-600'
+                : 'bg-blue-50 text-blue-600'
+            }`}
+          >
+            {getTemplateTypeLabel(props.command.template_type)}
+          </span>
+          <span className="flex-1 font-mono text-xs text-gray-600 bg-gray-50 rounded px-2 py-1 truncate">
+            {props.command.command_text}
+          </span>
+        </div>
+        {/* 第三行:子分类(二级) */}
+        {props.command.sub_category && (
+          <div className="mt-1.5 flex items-center gap-2 text-xs text-gray-500">
+            <span className="rounded bg-gray-100 px-1.5 py-0.5">{props.command.sub_category}</span>
+          </div>
+        )}
+      </button>
+
+      {/* 右键上下文菜单 */}
+      {contextMenu && (
+        <div
+          ref={menuRef}
+          className="fixed z-50 min-w-[160px] bg-white rounded-lg shadow-lg border border-gray-200 py-1"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          {/* 移动到分类 */}
+          <div
+            className="relative"
+            onMouseEnter={() => setMoveSubmenuOpen(true)}
+            onMouseLeave={() => setMoveSubmenuOpen(false)}
+          >
+            <div className="flex items-center justify-between px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer">
+              移动到分类
+              <ChevronRight size={14} className="text-gray-400" />
+            </div>
+            {moveSubmenuOpen && props.categories.length > 0 && (
+              <div
+                className="absolute left-full top-0 ml-1 min-w-[140px] bg-white rounded-lg shadow-lg border border-gray-200 py-1"
+                onMouseEnter={() => setMoveSubmenuOpen(true)}
+                onMouseLeave={() => setMoveSubmenuOpen(false)}
+              >
+                {props.categories.map((cat) => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => {
+                      props.onMoveToCategory(cat.id);
+                      closeMenu();
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 whitespace-nowrap"
+                  >
+                    {cat.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            {moveSubmenuOpen && props.categories.length === 0 && (
+              <div className="absolute left-full top-0 ml-1 min-w-[140px] bg-white rounded-lg shadow-lg border border-gray-200 py-2 px-3 text-sm text-gray-400">
+                无其他分类
+              </div>
+            )}
+          </div>
+
+          <hr className="my-1 border-gray-100" />
+
+          {/* 删除 */}
+          <button
+            type="button"
+            onClick={() => {
+              props.onDelete();
+              closeMenu();
+            }}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+          >
+            <Trash2 size={14} />
+            删除
+          </button>
         </div>
       )}
     </>

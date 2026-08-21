@@ -1,6 +1,10 @@
-﻿package user
+package user
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/labstack/echo/v4"
+)
 
 type Handler struct{}
 
@@ -8,13 +12,7 @@ func NewHandler() *Handler {
 	return &Handler{}
 }
 
-func (handler *Handler) Me(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	writeJSON(w, http.StatusNotImplemented, map[string]string{
-		"error": "user profile storage is not wired yet",
-	})
+// Me 返回当前登录用户信息（占位实现，用户存储尚未接入）
+func (handler *Handler) Me(c echo.Context) error {
+	return echo.NewHTTPError(http.StatusNotImplemented, "user profile storage is not wired yet")
 }

@@ -9,10 +9,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"personal-agents/backend/internal/category"
-	"personal-agents/backend/internal/config"
 	"strings"
 	"time"
+
+	"github.com/labstack/echo/v4"
+
+	"personal-agents/backend/internal/category"
+	"personal-agents/backend/internal/config"
 )
 
 // ParseAIRequest AI 解释文本解析请求
@@ -180,59 +183,47 @@ type chatResponse struct {
 	Choices []chatChoice `json:"choices"`
 }
 
-// ParseAI 处理 POST /api/v1/knowledge/parse-ai
-func (handler *Handler) ParseAI(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
+// ParseAI POST /api/v1/knowledge/parse-ai
+func (handler *Handler) ParseAI(c echo.Context) error {
 	var req ParseAIRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
 	}
 
 	req.RawText = strings.TrimSpace(req.RawText)
 	if req.RawText == "" {
-		writeError(w, http.StatusBadRequest, "raw_text is required")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "raw_text is required")
 	}
 
 	if req.TemplateType == "" {
 		req.TemplateType = "article"
 	}
 	if !isValidTemplateType(req.TemplateType) {
-		writeError(w, http.StatusBadRequest, "invalid template_type")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid template_type")
 	}
 
 	if req.CategoryID <= 0 {
-		writeError(w, http.StatusBadRequest, "category_id is required")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "category_id is required")
 	}
 
-	cat, err := handler.categoryStore.GetByID(r.Context(), req.CategoryID)
+	cat, err := handler.categoryStore.GetByID(c.Request().Context(), req.CategoryID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read category")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read category")
 	}
 	if cat == nil || cat.Scope != category.ScopeKnowledge {
-		writeError(w, http.StatusBadRequest, "invalid category_id")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid category_id")
 	}
 
-	result, err := handler.parseWithLLM(r.Context(), req.RawText, cat.Slug, req.TemplateType)
+	result, err := handler.parseWithLLM(c.Request().Context(), req.RawText, cat.Slug, req.TemplateType)
 	if err != nil {
 		slog.Error("parse knowledge with llm failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "parse failed")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "parse failed")
 	}
 
 	result.CategoryID = cat.ID
 	result.Category = cat.Name
 
-	writeJSON(w, http.StatusOK, result)
+	return c.JSON(http.StatusOK, result)
 }
 
 func (handler *Handler) parseWithLLM(ctx context.Context, rawText string, category string, templateType string) (*ParseAIResponse, error) {

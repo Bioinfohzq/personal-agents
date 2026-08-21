@@ -5,6 +5,7 @@ import { useSearchParams } from 'react-router-dom';
 import {
   BookOpen,
   Check,
+  ChevronRight,
   Copy,
   ExternalLink,
   Loader2,
@@ -23,6 +24,7 @@ import {
   deleteKnowledgeItem,
   getKnowledgeItem,
   listKnowledgeItems,
+  moveKnowledgeCategory,
   parseKnowledgeAI,
   updateKnowledgeItem,
 } from '../../api/knowledgebook';
@@ -451,8 +453,8 @@ export function KnowledgebookPage() {
   }
 
   // 从列表卡片删除知识条目
-  async function handleDeleteItemFromList(item: KnowledgeSummary, event: React.MouseEvent) {
-    event.stopPropagation();
+  async function handleDeleteItemFromList(item: KnowledgeSummary, event?: React.MouseEvent) {
+    if (event) event.stopPropagation();
     const confirmed = window.confirm(`确定删除知识「${item.title}」吗？`);
     if (!confirmed) return;
 
@@ -465,6 +467,22 @@ export function KnowledgebookPage() {
       }
     } catch (deleteError) {
       handleApiError(deleteError, '删除失败', setListError);
+    }
+  }
+
+  // 移动知识到其他分类
+  async function handleMoveItemToCategory(item: KnowledgeSummary, targetCategoryId: number) {
+    try {
+      await moveKnowledgeCategory(token, item.id, targetCategoryId);
+      await loadItems(selectedCategoryId, searchKeyword);
+      await loadCategoryCounts();
+      // 如果当前查看的是这条记录，更新详情
+      if (selectedSummary?.id === item.id && selectedDetail) {
+        const updated = await getKnowledgeItem(token, item.id);
+        setSelectedDetail(updated);
+      }
+    } catch (err) {
+      handleApiError(err, '移动分类失败', setListError);
     }
   }
 
@@ -706,67 +724,16 @@ export function KnowledgebookPage() {
             ) : (
               <div className="space-y-2">
                 {items.map((item) => (
-                  <button
+                  <KnowledgeItemCard
                     key={item.id}
-                    type="button"
+                    item={item}
+                    isActive={selectedSummary?.id === item.id}
+                    category={categoryMap.get(item.category_id)}
+                    categories={categories.filter(c => c.id !== item.category_id)}
                     onClick={() => void openItemDetail(item)}
-                    className={`group relative w-full text-left rounded-xl border p-3 transition-colors hover:border-indigo-300 hover:bg-indigo-50/40 ${
-                      selectedSummary?.id === item.id
-                        ? 'border-indigo-300 bg-indigo-50'
-                        : 'border-gray-200'
-                    }`}
-                  >
-                    {/* 删除按钮:悬停显示 */}
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={(event) => void handleDeleteItemFromList(item, event)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault();
-                          void handleDeleteItemFromList(item, event as unknown as React.MouseEvent);
-                        }
-                      }}
-                      title="删除知识"
-                      className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 focus:opacity-100 rounded p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-opacity"
-                    >
-                      <Trash2 size={14} />
-                    </span>
-                    <div className="flex items-center justify-between gap-2 pr-7">
-                      <span className="text-sm font-semibold text-gray-900 truncate">
-                        {item.title}
-                      </span>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <span
-                          className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                            item.template_type === 'procedure'
-                              ? 'bg-purple-50 text-purple-600'
-                              : 'bg-blue-50 text-blue-600'
-                          }`}
-                        >
-                          {getTemplateTypeLabel(item.template_type)}
-                        </span>
-                        <KnowledgeCategoryBadge category={categoryMap.get(item.category_id)} />
-                      </div>
-                    </div>
-                    {item.summary && (
-                      <div className="mt-1.5 text-xs text-gray-500 line-clamp-2">
-                        {item.summary}
-                      </div>
-                    )}
-                    <div className="mt-1.5 flex items-center gap-2 flex-wrap">
-                      {item.sub_category && (
-                        <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
-                          {item.sub_category}
-                        </span>
-                      )}
-                      {parseTags(item.tags).map((tag) => (
-                        <span key={tag} className="rounded bg-indigo-50 px-1.5 py-0.5 text-xs text-indigo-600">
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  </button>
+                    onMoveToCategory={(targetId) => void handleMoveItemToCategory(item, targetId)}
+                    onDelete={() => void handleDeleteItemFromList(item)}
+                  />
                 ))}
               </div>
             )}
@@ -1041,6 +1008,153 @@ function KnowledgeCategoryBadge(props: { category?: Category; value?: string }) 
     <span className="shrink-0 rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600">
       {displayName}
     </span>
+  );
+}
+
+// 知识记录卡片:支持右键菜单(移动分类/删除)
+function KnowledgeItemCard(props: {
+  item: KnowledgeSummary;
+  isActive: boolean;
+  category?: Category;
+  categories: Category[];
+  onClick: () => void;
+  onMoveToCategory: (targetCategoryId: number) => void;
+  onDelete: () => void;
+}) {
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [moveSubmenuOpen, setMoveSubmenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  function handleContextMenu(e: React.MouseEvent) {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY });
+  }
+
+  function closeMenu() {
+    setContextMenu(null);
+    setMoveSubmenuOpen(false);
+  }
+
+  // 点击外部关闭菜单
+  useEffect(() => {
+    if (!contextMenu) return;
+    function handler(e: PointerEvent) {
+      if (menuRef.current && menuRef.current.contains(e.target as Node)) return;
+      closeMenu();
+    }
+    document.addEventListener('pointerdown', handler);
+    return () => document.removeEventListener('pointerdown', handler);
+  }, [contextMenu]);
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={props.onClick}
+        onContextMenu={handleContextMenu}
+        className={`relative w-full text-left rounded-xl border p-3 transition-colors hover:border-indigo-300 hover:bg-indigo-50/40 ${
+          props.isActive ? 'border-indigo-300 bg-indigo-50' : 'border-gray-200'
+        }`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-semibold text-gray-900 truncate">
+            {props.item.title}
+          </span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span
+              className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                props.item.template_type === 'procedure'
+                  ? 'bg-purple-50 text-purple-600'
+                  : 'bg-blue-50 text-blue-600'
+              }`}
+            >
+              {getTemplateTypeLabel(props.item.template_type)}
+            </span>
+            <KnowledgeCategoryBadge category={props.category} />
+          </div>
+        </div>
+        {props.item.summary && (
+          <div className="mt-1.5 text-xs text-gray-500 line-clamp-2">
+            {props.item.summary}
+          </div>
+        )}
+        <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+          {props.item.sub_category && (
+            <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
+              {props.item.sub_category}
+            </span>
+          )}
+          {parseTags(props.item.tags).map((tag) => (
+            <span key={tag} className="rounded bg-indigo-50 px-1.5 py-0.5 text-xs text-indigo-600">
+              {tag}
+            </span>
+          ))}
+        </div>
+      </button>
+
+      {/* 右键上下文菜单 */}
+      {contextMenu && (
+        <div
+          ref={menuRef}
+          className="fixed z-50 min-w-[160px] bg-white rounded-lg shadow-lg border border-gray-200 py-1"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          {/* 移动到分类 */}
+          <div
+            className="relative"
+            onMouseEnter={() => setMoveSubmenuOpen(true)}
+            onMouseLeave={() => setMoveSubmenuOpen(false)}
+          >
+            <div className="flex items-center justify-between px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 cursor-pointer">
+              移动到分类
+              <ChevronRight size={14} className="text-gray-400" />
+            </div>
+            {/* 子菜单:可选分类列表 */}
+            {moveSubmenuOpen && props.categories.length > 0 && (
+              <div
+                className="absolute left-full top-0 ml-1 min-w-[140px] bg-white rounded-lg shadow-lg border border-gray-200 py-1"
+                onMouseEnter={() => setMoveSubmenuOpen(true)}
+                onMouseLeave={() => setMoveSubmenuOpen(false)}
+              >
+                {props.categories.map((cat) => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => {
+                      props.onMoveToCategory(cat.id);
+                      closeMenu();
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 whitespace-nowrap"
+                  >
+                    {cat.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            {moveSubmenuOpen && props.categories.length === 0 && (
+              <div className="absolute left-full top-0 ml-1 min-w-[140px] bg-white rounded-lg shadow-lg border border-gray-200 py-2 px-3 text-sm text-gray-400">
+                无其他分类
+              </div>
+            )}
+          </div>
+
+          <hr className="my-1 border-gray-100" />
+
+          {/* 删除 */}
+          <button
+            type="button"
+            onClick={() => {
+              props.onDelete();
+              closeMenu();
+            }}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+          >
+            <Trash2 size={14} />
+            删除
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1502,8 +1616,7 @@ function KnowledgeForm(props: {
             value={values.category_id}
             onChange={(e) => {
               const newCategoryId = Number(e.target.value);
-              updateField('category_id', newCategoryId);
-              updateField('extra', '');
+              onChange({ ...values, category_id: newCategoryId, extra: '' });
             }}
             className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             required

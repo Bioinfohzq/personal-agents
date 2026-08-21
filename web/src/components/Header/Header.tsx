@@ -61,7 +61,7 @@ export function Header({
     if (location.pathname.startsWith('/passwordbook')) {
       return { title: '密码本', subtitle: '个人账号资料管理', icon: KeyRound };
     }
-    return { title: '个人助手', subtitle: '', icon: Bot };
+    return { title: '个人中台', subtitle: '', icon: Bot };
   }, [location.pathname]);
 
   const { title, subtitle, icon: Icon } = pageMeta;

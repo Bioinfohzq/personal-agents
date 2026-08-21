@@ -1,7 +1,11 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
+
+	"github.com/labstack/echo/v4"
+	echomw "github.com/labstack/echo/v4/middleware"
 
 	"personal-agents/backend/internal/auth"
 	"personal-agents/backend/internal/category"
@@ -28,57 +32,108 @@ func New(cfg config.Config, store *database.Store) *Server {
 	}
 }
 
-func (server *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
+// Handler 返回 echo 路由引擎
+func (server *Server) Handler() *echo.Echo {
+	e := echo.New()
+	e.HideBanner = true
+	e.HidePort = true
 
-	authHandler := auth.NewHandler(server.store, server.cfg.Auth)
-	passwordbookHandler := passwordbook.NewHandler(server.store, server.cfg.Auth.JWTSecret)
-	scheduleHandler := schedule.NewHandler(server.store)
-	categoryHandler := category.NewHandler(server.store)
-	commandbookHandler := commandbook.NewHandler(server.store, server.cfg.LLM)
-	knowledgebookHandler := knowledgebook.NewHandler(server.store, server.cfg.LLM)
-	userHandler := user.NewHandler()
-
-	mux.HandleFunc("/healthz", server.handleHealth)
-	mux.HandleFunc("/api/v1/health", server.handleHealth)
-	mux.HandleFunc("/api/v1/auth/login", authHandler.Login)
-	mux.HandleFunc("/api/v1/auth/register", authHandler.Register)
-	mux.Handle("/api/v1/users/me", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(userHandler.Me)))
-	mux.Handle("/api/v1/passwordbook/items", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(passwordbookHandler.Items)))
-	mux.Handle("/api/v1/passwordbook/items/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(passwordbookHandler.Item)))
-	// 日程管理:需要 JWT 鉴权,支持按 ?start=&end= 过滤时间范围
-	mux.Handle("/api/v1/schedules", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(scheduleHandler.Schedules)))
-	mux.Handle("/api/v1/schedules/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(scheduleHandler.Schedule)))
-	// 命令手册:记录各类命令及个人理解,支持 ?category_id=&q= 过滤搜索
-	mux.Handle("/api/v1/commands", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(commandbookHandler.Commands)))
-	mux.Handle("/api/v1/commands/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(commandbookHandler.Command)))
-	// 命令手册:AI 智能解析 AI 解释文本并预填命令字段
-	mux.Handle("/api/v1/commands/parse-ai", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(commandbookHandler.ParseAI)))
-	// 知识库:记录结构化知识点,支持 ?category_id=&q= 过滤搜索
-	mux.Handle("/api/v1/knowledge", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(knowledgebookHandler.KnowledgeItems)))
-	mux.Handle("/api/v1/knowledge/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(knowledgebookHandler.KnowledgeItem)))
-	// 知识库:AI 智能解析 AI 解释文本并预填知识字段
-	mux.Handle("/api/v1/knowledge/parse-ai", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(knowledgebookHandler.ParseAI)))
-	// 分类管理:支持知识库/命令手册的分类增删改查和重命名
-	mux.Handle("/api/v1/categories", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(categoryHandler.Categories)))
-	mux.Handle("/api/v1/categories/", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(categoryHandler.Category)))
-
-	// 文件系统管理:目录扫描/存储分析/权限查看,仅 macOS/Linux 可用
-	filesystemHandler := filesystem.NewHandler()
-	mux.Handle("/api/v1/filesystem/scan", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(filesystemHandler.Scan)))
-	mux.Handle("/api/v1/filesystem/storage", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(filesystemHandler.Storage)))
-	mux.Handle("/api/v1/filesystem/permissions", middleware.RequireAuth(server.cfg.Auth.JWTSecret, http.HandlerFunc(filesystemHandler.Permissions)))
-
-	return middleware.Recover(middleware.CORS(middleware.RequestLog(mux)))
-}
-
-func (server *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
+	// 自定义错误响应格式，保持和旧接口一致: {"error": "..."}
+	e.HTTPErrorHandler = func(err error, c echo.Context) {
+		if c.Response().Committed {
+			return
+		}
+		if he, ok := err.(*echo.HTTPError); ok {
+			_ = c.JSON(he.Code, map[string]string{
+				"error": fmt.Sprintf("%v", he.Message),
+			})
+			return
+		}
+		_ = c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "internal server error",
+		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	// 全局中间件: 恢复 panic / CORS / 请求日志
+	e.Use(echomw.Recover())
+	e.Use(echomw.CORSWithConfig(echomw.CORSConfig{
+		AllowOrigins:     []string{"*"},
+		AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions},
+		AllowHeaders:     []string{"Content-Type", "Authorization"},
+		AllowCredentials: true,
+	}))
+	e.Use(middleware.RequestLogEcho)
+
+	// 健康检查（无需鉴权）
+	e.GET("/healthz", server.handleHealth)
+	e.GET("/api/v1/health", server.handleHealth)
+
+	// 认证接口（无需鉴权）
+	authHandler := auth.NewHandler(server.store, server.cfg.Auth)
+	e.POST("/api/v1/auth/login", authHandler.Login)
+	e.POST("/api/v1/auth/register", authHandler.Register)
+
+	// 需要鉴权的 API 路由组
+	api := e.Group("/api/v1", middleware.RequireAuthEcho(server.cfg.Auth.JWTSecret))
+
+	// 用户接口
+	userHandler := user.NewHandler()
+	api.GET("/users/me", userHandler.Me)
+
+	// 密码本接口
+	passwordbookHandler := passwordbook.NewHandler(server.store, server.cfg.Auth.JWTSecret)
+	api.GET("/passwordbook/items", passwordbookHandler.ListItems)
+	api.POST("/passwordbook/items", passwordbookHandler.CreateItem)
+	api.GET("/passwordbook/items/:id", passwordbookHandler.GetItem)
+	api.PUT("/passwordbook/items/:id", passwordbookHandler.UpdateItem)
+	api.DELETE("/passwordbook/items/:id", passwordbookHandler.DeleteItem)
+
+	// 日程管理
+	scheduleHandler := schedule.NewHandler(server.store)
+	api.GET("/schedules", scheduleHandler.ListSchedules)
+	api.POST("/schedules", scheduleHandler.CreateSchedule)
+	api.GET("/schedules/:id", scheduleHandler.GetSchedule)
+	api.PUT("/schedules/:id", scheduleHandler.UpdateSchedule)
+	api.DELETE("/schedules/:id", scheduleHandler.DeleteSchedule)
+
+	// 命令手册
+	commandbookHandler := commandbook.NewHandler(server.store, server.cfg.LLM)
+	api.GET("/commands", commandbookHandler.ListCommands)
+	api.POST("/commands", commandbookHandler.CreateCommand)
+	api.POST("/commands/parse-ai", commandbookHandler.ParseAI)
+	api.GET("/commands/:id", commandbookHandler.GetCommand)
+	api.PUT("/commands/:id", commandbookHandler.UpdateCommand)
+	api.POST("/commands/:id/move", commandbookHandler.MoveCommandCategory)
+	api.DELETE("/commands/:id", commandbookHandler.DeleteCommand)
+
+	// 知识库
+	knowledgebookHandler := knowledgebook.NewHandler(server.store, server.cfg.LLM)
+	api.GET("/knowledge", knowledgebookHandler.ListKnowledgeItems)
+	api.POST("/knowledge", knowledgebookHandler.CreateKnowledgeItem)
+	api.POST("/knowledge/parse-ai", knowledgebookHandler.ParseAI)
+	api.GET("/knowledge/:id", knowledgebookHandler.GetKnowledgeItem)
+	api.PUT("/knowledge/:id", knowledgebookHandler.UpdateKnowledgeItem)
+	api.POST("/knowledge/:id/move", knowledgebookHandler.MoveKnowledgeCategory)
+	api.DELETE("/knowledge/:id", knowledgebookHandler.DeleteKnowledgeItem)
+
+	// 分类管理
+	categoryHandler := category.NewHandler(server.store)
+	api.GET("/categories", categoryHandler.ListCategories)
+	api.POST("/categories", categoryHandler.CreateCategory)
+	api.PUT("/categories/:id", categoryHandler.RenameCategory)
+	api.DELETE("/categories/:id", categoryHandler.DeleteCategory)
+	// 文件系统管理
+	filesystemHandler := filesystem.NewHandler()
+	api.GET("/filesystem/scan", filesystemHandler.Scan)
+	api.GET("/filesystem/storage", filesystemHandler.Storage)
+	api.GET("/filesystem/permissions", filesystemHandler.Permissions)
+
+	return e
+}
+
+// handleHealth 健康检查（echo 原生风格）
+func (server *Server) handleHealth(c echo.Context) error {
+	return c.JSON(http.StatusOK, map[string]any{
 		"status":             "ok",
 		"service":            server.cfg.AppName,
 		"env":                server.cfg.Env,

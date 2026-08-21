@@ -1,19 +1,19 @@
-﻿package passwordbook
+package passwordbook
 
 import (
+	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/labstack/echo/v4"
+
 	"personal-agents/backend/internal/database"
 	"personal-agents/backend/internal/middleware"
 )
-
-const itemPathPrefix = "/api/v1/passwordbook/items/"
 
 type Handler struct {
 	store            *database.Store
@@ -75,45 +75,15 @@ func NewHandler(store *database.Store, encryptionSecret string) *Handler {
 	}
 }
 
-func (handler *Handler) Items(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		handler.ListItems(w, r)
-	case http.MethodPost:
-		handler.CreateItem(w, r)
-	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
-
-func (handler *Handler) Item(w http.ResponseWriter, r *http.Request) {
-	itemID, ok := itemIDFromPath(r.URL.Path)
+// ListItems GET /api/v1/passwordbook/items
+func (handler *Handler) ListItems(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusNotFound, "passwordbook item not found")
-		return
-	}
-
-	switch r.Method {
-	case http.MethodGet:
-		handler.GetItem(w, r, itemID)
-	case http.MethodPut:
-		handler.UpdateItem(w, r, itemID)
-	case http.MethodDelete:
-		handler.DeleteItem(w, r, itemID)
-	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
-
-func (handler *Handler) ListItems(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
 	}
 
 	rows, err := handler.store.DB().QueryContext(
-		r.Context(),
+		c.Request().Context(),
 		`SELECT id, platform, login_account, login_url, notes, created_at, updated_at
 		 FROM passwordbook_items
 		 WHERE user_id = ?
@@ -121,8 +91,7 @@ func (handler *Handler) ListItems(w http.ResponseWriter, r *http.Request) {
 		userID,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to query passwordbook items")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to query passwordbook items")
 	}
 	defer rows.Close()
 
@@ -130,49 +99,44 @@ func (handler *Handler) ListItems(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var record itemRecord
 		if err := rows.Scan(&record.ID, &record.Platform, &record.LoginAccount, &record.LoginURL, &record.Notes, &record.CreatedAt, &record.UpdatedAt); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to read passwordbook item")
-			return
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to read passwordbook item")
 		}
 
 		items = append(items, record.summary())
 	}
 	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read passwordbook items")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read passwordbook items")
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	return c.JSON(http.StatusOK, map[string]any{
 		"items": items,
 	})
 }
 
-func (handler *Handler) CreateItem(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+// CreateItem POST /api/v1/passwordbook/items
+func (handler *Handler) CreateItem(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
 	}
 
 	var request CreateItemRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid json body")
 	}
 
 	request.normalize()
 	if request.Platform == "" || request.LoginAccount == "" || request.Password == "" {
-		writeError(w, http.StatusBadRequest, "platform, login_account and password are required")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "platform, login_account and password are required")
 	}
 
 	passwordCiphertext, err := encryptSecret(request.Password, handler.encryptionSecret)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to encrypt password")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to encrypt password")
 	}
 
 	result, err := handler.store.DB().ExecContext(
-		r.Context(),
+		c.Request().Context(),
 		`INSERT INTO passwordbook_items (user_id, platform, login_account, password_ciphertext, login_url, notes)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		userID,
@@ -183,132 +147,132 @@ func (handler *Handler) CreateItem(w http.ResponseWriter, r *http.Request) {
 		nullableString(request.Notes),
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create passwordbook item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create passwordbook item")
 	}
 
 	itemID, err := result.LastInsertId()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read created passwordbook item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read created passwordbook item")
 	}
 
-	detail, err := handler.findItemDetail(r, userID, itemID)
+	detail, err := handler.findItemDetail(c.Request().Context(), userID, itemID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read created passwordbook item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read created passwordbook item")
 	}
 
-	writeJSON(w, http.StatusCreated, detail)
+	return c.JSON(http.StatusCreated, detail)
 }
 
-func (handler *Handler) GetItem(w http.ResponseWriter, r *http.Request, itemID int64) {
-	userID, ok := currentUserID(r)
+// GetItem GET /api/v1/passwordbook/items/:id
+func (handler *Handler) GetItem(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
 	}
 
-	detail, err := handler.findItemDetail(r, userID, itemID)
+	itemID, err := parseItemID(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "passwordbook item not found")
+	}
+
+	detail, err := handler.findItemDetail(c.Request().Context(), userID, itemID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "passwordbook item not found")
-			return
+			return echo.NewHTTPError(http.StatusNotFound, "passwordbook item not found")
 		}
 
-		writeError(w, http.StatusInternalServerError, "failed to read passwordbook item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read passwordbook item")
 	}
 
-	writeJSON(w, http.StatusOK, detail)
+	return c.JSON(http.StatusOK, detail)
 }
 
-func (handler *Handler) UpdateItem(w http.ResponseWriter, r *http.Request, itemID int64) {
-	userID, ok := currentUserID(r)
+// UpdateItem PUT /api/v1/passwordbook/items/:id
+func (handler *Handler) UpdateItem(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
+	}
+
+	itemID, err := parseItemID(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "passwordbook item not found")
 	}
 
 	var request UpdateItemRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid json body")
 	}
 
 	request.normalize()
 	if request.Platform == "" || request.LoginAccount == "" {
-		writeError(w, http.StatusBadRequest, "platform and login_account are required")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "platform and login_account are required")
 	}
 
-	result, err := handler.updateItem(r, userID, itemID, request)
+	result, err := handler.updateItem(c.Request().Context(), userID, itemID, request)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update passwordbook item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update passwordbook item")
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read updated passwordbook item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read updated passwordbook item")
 	}
 	if rowsAffected == 0 {
-		exists, err := handler.itemExists(r, userID, itemID)
+		exists, err := handler.itemExists(c.Request().Context(), userID, itemID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to read updated passwordbook item")
-			return
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to read updated passwordbook item")
 		}
 		if !exists {
-			writeError(w, http.StatusNotFound, "passwordbook item not found")
-			return
+			return echo.NewHTTPError(http.StatusNotFound, "passwordbook item not found")
 		}
 	}
 
-	detail, err := handler.findItemDetail(r, userID, itemID)
+	detail, err := handler.findItemDetail(c.Request().Context(), userID, itemID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read updated passwordbook item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read updated passwordbook item")
 	}
 
-	writeJSON(w, http.StatusOK, detail)
+	return c.JSON(http.StatusOK, detail)
 }
 
-func (handler *Handler) DeleteItem(w http.ResponseWriter, r *http.Request, itemID int64) {
-	userID, ok := currentUserID(r)
+// DeleteItem DELETE /api/v1/passwordbook/items/:id
+func (handler *Handler) DeleteItem(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
+	}
+
+	itemID, err := parseItemID(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "passwordbook item not found")
 	}
 
 	result, err := handler.store.DB().ExecContext(
-		r.Context(),
+		c.Request().Context(),
 		`DELETE FROM passwordbook_items WHERE id = ? AND user_id = ?`,
 		itemID,
 		userID,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to delete passwordbook item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete passwordbook item")
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read deleted passwordbook item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read deleted passwordbook item")
 	}
 	if rowsAffected == 0 {
-		writeError(w, http.StatusNotFound, "passwordbook item not found")
-		return
+		return echo.NewHTTPError(http.StatusNotFound, "passwordbook item not found")
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	return c.NoContent(http.StatusNoContent)
 }
 
-func (handler *Handler) updateItem(r *http.Request, userID int64, itemID int64, request UpdateItemRequest) (sql.Result, error) {
+func (handler *Handler) updateItem(ctx context.Context, userID int64, itemID int64, request UpdateItemRequest) (sql.Result, error) {
 	if request.Password == "" {
 		return handler.store.DB().ExecContext(
-			r.Context(),
+			ctx,
 			`UPDATE passwordbook_items
 			 SET platform = ?, login_account = ?, login_url = ?, notes = ?
 			 WHERE id = ? AND user_id = ?`,
@@ -327,7 +291,7 @@ func (handler *Handler) updateItem(r *http.Request, userID int64, itemID int64, 
 	}
 
 	return handler.store.DB().ExecContext(
-		r.Context(),
+		ctx,
 		`UPDATE passwordbook_items
 		 SET platform = ?, login_account = ?, password_ciphertext = ?, login_url = ?, notes = ?
 		 WHERE id = ? AND user_id = ?`,
@@ -341,10 +305,10 @@ func (handler *Handler) updateItem(r *http.Request, userID int64, itemID int64, 
 	)
 }
 
-func (handler *Handler) itemExists(r *http.Request, userID int64, itemID int64) (bool, error) {
+func (handler *Handler) itemExists(ctx context.Context, userID int64, itemID int64) (bool, error) {
 	var count int
 	err := handler.store.DB().QueryRowContext(
-		r.Context(),
+		ctx,
 		`SELECT COUNT(*) FROM passwordbook_items WHERE id = ? AND user_id = ?`,
 		itemID,
 		userID,
@@ -352,10 +316,10 @@ func (handler *Handler) itemExists(r *http.Request, userID int64, itemID int64) 
 	return count > 0, err
 }
 
-func (handler *Handler) findItemDetail(r *http.Request, userID int64, itemID int64) (ItemDetail, error) {
+func (handler *Handler) findItemDetail(ctx context.Context, userID int64, itemID int64) (ItemDetail, error) {
 	var record itemRecord
 	row := handler.store.DB().QueryRowContext(
-		r.Context(),
+		ctx,
 		`SELECT id, platform, login_account, password_ciphertext, login_url, notes, created_at, updated_at
 		 FROM passwordbook_items
 		 WHERE id = ? AND user_id = ?
@@ -415,22 +379,12 @@ func (record itemRecord) detail(password string) ItemDetail {
 	}
 }
 
-func itemIDFromPath(path string) (int64, bool) {
-	idText := strings.TrimPrefix(path, itemPathPrefix)
-	if idText == "" || strings.Contains(idText, "/") {
-		return 0, false
-	}
-
+func parseItemID(idText string) (int64, error) {
 	itemID, err := strconv.ParseInt(idText, 10, 64)
 	if err != nil || itemID <= 0 {
-		return 0, false
+		return 0, errors.New("invalid item id")
 	}
-
-	return itemID, true
-}
-
-func currentUserID(r *http.Request) (int64, bool) {
-	return middleware.CurrentUserID(r)
+	return itemID, nil
 }
 
 func nullableString(value string) sql.NullString {

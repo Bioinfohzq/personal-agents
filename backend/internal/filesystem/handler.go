@@ -1,4 +1,4 @@
-﻿package filesystem
+package filesystem
 
 import (
 	"fmt"
@@ -11,10 +11,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
-)
 
-// fsPathPrefix 文件系统单条操作的路由前缀
-const fsPathPrefix = "/api/v1/filesystem/"
+	"github.com/labstack/echo/v4"
+)
 
 // Handler 文件系统 HTTP 处理器
 type Handler struct{}
@@ -46,30 +45,22 @@ type StorageItem struct {
 	SizeBytes int64  `json:"size_bytes"` // 字节数(用于排序)
 }
 
-// Scan 扫描目录
+// Scan GET /api/v1/filesystem/scan
 //
-//	GET /api/v1/filesystem/scan?path=...&depth=1
-//	path: 要扫描的目录路径,默认用户 home 目录
-//	depth: 扫描深度,默认 1,最大 2(防止响应过大)
-func (handler *Handler) Scan(w http.ResponseWriter, r *http.Request) {
+//	?path=...  要扫描的目录路径,默认用户 home 目录
+//	?depth=1   扫描深度,默认 1,最大 2(防止响应过大)
+func (handler *Handler) Scan(c echo.Context) error {
 	// 仅支持 macOS / Linux
 	if runtime.GOOS == "windows" {
-		writeError(w, http.StatusNotImplemented, "filesystem scan not supported on Windows")
-		return
-	}
-
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
+		return echo.NewHTTPError(http.StatusNotImplemented, "filesystem scan not supported on Windows")
 	}
 
 	// 获取路径参数,默认 home 目录
-	path := r.URL.Query().Get("path")
+	path := c.QueryParam("path")
 	if path == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to get home directory")
-			return
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get home directory")
 		}
 		path = home
 	}
@@ -79,7 +70,7 @@ func (handler *Handler) Scan(w http.ResponseWriter, r *http.Request) {
 
 	// 解析深度参数,默认 1,最大 2
 	depth := 1
-	if d := r.URL.Query().Get("depth"); d != "" {
+	if d := c.QueryParam("depth"); d != "" {
 		if _, err := fmt.Sscanf(d, "%d", &depth); err == nil {
 			if depth > 2 {
 				depth = 2
@@ -93,49 +84,38 @@ func (handler *Handler) Scan(w http.ResponseWriter, r *http.Request) {
 	// 扫描目录
 	entries, err := scanDirectory(path, depth)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to scan: %v", err))
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("failed to scan: %v", err))
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	return c.JSON(http.StatusOK, map[string]any{
 		"path":    path,
 		"entries": entries,
 	})
 }
 
-// Storage 分析磁盘占用
+// Storage GET /api/v1/filesystem/storage
 //
-//	GET /api/v1/filesystem/storage?path=...
-//	path: 要分析的目录路径,默认 home 目录
+//	?path=...  要分析的目录路径,默认 home 目录
 //	返回各子目录的占用大小,按降序排列
-func (handler *Handler) Storage(w http.ResponseWriter, r *http.Request) {
+func (handler *Handler) Storage(c echo.Context) error {
 	if runtime.GOOS == "windows" {
-		writeError(w, http.StatusNotImplemented, "storage analysis not supported on Windows")
-		return
+		return echo.NewHTTPError(http.StatusNotImplemented, "storage analysis not supported on Windows")
 	}
 
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	path := r.URL.Query().Get("path")
+	path := c.QueryParam("path")
 	if path == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to get home directory")
-			return
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to get home directory")
 		}
 		path = home
 	}
 	path = expandHome(path)
 
 	// 用 du 命令分析各子目录大小
-	// du -sh 每个子目录,获取人类可读大小
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to read directory: %v", err))
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("failed to read directory: %v", err))
 	}
 
 	var items []StorageItem
@@ -147,7 +127,7 @@ func (handler *Handler) Storage(w http.ResponseWriter, r *http.Request) {
 		fullPath := filepath.Join(path, entry.Name())
 
 		// 用 du -sk 获取大小(KB),再转为人类可读
-		cmd := exec.CommandContext(r.Context(), "du", "-sk", fullPath)
+		cmd := exec.CommandContext(c.Request().Context(), "du", "-sk", fullPath)
 		output, err := cmd.Output()
 		if err != nil {
 			// 权限不足等情况跳过
@@ -177,43 +157,34 @@ func (handler *Handler) Storage(w http.ResponseWriter, r *http.Request) {
 		return items[i].SizeBytes > items[j].SizeBytes
 	})
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	return c.JSON(http.StatusOK, map[string]any{
 		"path":  path,
 		"items": items,
 	})
 }
 
-// Permissions 查看文件/目录详细权限
+// Permissions GET /api/v1/filesystem/permissions
 //
-//	GET /api/v1/filesystem/permissions?path=...
-func (handler *Handler) Permissions(w http.ResponseWriter, r *http.Request) {
+//	?path=...  文件/目录路径(必填)
+func (handler *Handler) Permissions(c echo.Context) error {
 	if runtime.GOOS == "windows" {
-		writeError(w, http.StatusNotImplemented, "permission check not supported on Windows")
-		return
+		return echo.NewHTTPError(http.StatusNotImplemented, "permission check not supported on Windows")
 	}
 
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	path := r.URL.Query().Get("path")
+	path := c.QueryParam("path")
 	if path == "" {
-		writeError(w, http.StatusBadRequest, "path parameter is required")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "path parameter is required")
 	}
 	path = expandHome(path)
 
 	info, err := os.Stat(path)
 	if err != nil {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("path not found: %v", err))
-		return
+		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("path not found: %v", err))
 	}
 
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
-		writeError(w, http.StatusInternalServerError, "failed to get file stat")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get file stat")
 	}
 
 	// 获取所有者和组名
@@ -226,7 +197,7 @@ func (handler *Handler) Permissions(w http.ResponseWriter, r *http.Request) {
 		group = groupname
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	return c.JSON(http.StatusOK, map[string]any{
 		"path":       path,
 		"name":       info.Name(),
 		"is_dir":     info.IsDir(),

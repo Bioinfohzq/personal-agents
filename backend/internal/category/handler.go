@@ -1,11 +1,12 @@
 package category
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/labstack/echo/v4"
 
 	"personal-agents/backend/internal/database"
 	"personal-agents/backend/internal/middleware"
@@ -32,217 +33,153 @@ type RenameRequest struct {
 	Name string `json:"name"`
 }
 
-// Categories 处理 /api/v1/categories 路由
-func (handler *Handler) Categories(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		handler.ListCategories(w, r)
-	case http.MethodPost:
-		handler.CreateCategory(w, r)
-	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
-
-// Category 处理 /api/v1/categories/{id} 路由
-func (handler *Handler) Category(w http.ResponseWriter, r *http.Request) {
-	categoryID, ok := categoryIDFromPath(r.URL.Path)
-	if !ok {
-		writeError(w, http.StatusNotFound, "category not found")
-		return
-	}
-
-	switch r.Method {
-	case http.MethodPut:
-		handler.RenameCategory(w, r, categoryID)
-	case http.MethodDelete:
-		handler.DeleteCategory(w, r, categoryID)
-	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
-
-// ListCategories 查询当前用户的分类列表
+// ListCategories GET /api/v1/categories
 // 支持 query 参数: ?scope=knowledge|command
-func (handler *Handler) ListCategories(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+func (handler *Handler) ListCategories(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
 	}
 
-	scope := strings.TrimSpace(r.URL.Query().Get("scope"))
+	scope := strings.TrimSpace(c.QueryParam("scope"))
 	if scope != ScopeKnowledge && scope != ScopeCommand {
-		writeError(w, http.StatusBadRequest, "invalid scope")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid scope")
 	}
 
-	categories, err := handler.store.List(r.Context(), userID, scope)
+	categories, err := handler.store.List(c.Request().Context(), userID, scope)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list categories")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to list categories")
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	return c.JSON(http.StatusOK, map[string]any{
 		"categories": categories,
 	})
 }
 
-// CreateCategory 创建自定义分类
-func (handler *Handler) CreateCategory(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+// CreateCategory POST /api/v1/categories
+func (handler *Handler) CreateCategory(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
 	}
 
 	var req CreateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid json body")
 	}
 
 	req.Scope = strings.TrimSpace(req.Scope)
 	req.Name = strings.TrimSpace(req.Name)
 
 	if req.Scope != ScopeKnowledge && req.Scope != ScopeCommand {
-		writeError(w, http.StatusBadRequest, "invalid scope")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid scope")
 	}
 	if req.Name == "" || len(req.Name) > 40 {
-		writeError(w, http.StatusBadRequest, "invalid category name")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid category name")
 	}
 
-	category, err := handler.store.Create(r.Context(), userID, req.Scope, req.Name)
+	category, err := handler.store.Create(c.Request().Context(), userID, req.Scope, req.Name)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create category")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create category")
 	}
 
-	writeJSON(w, http.StatusCreated, category)
+	return c.JSON(http.StatusCreated, category)
 }
 
-// RenameCategory 重命名自定义分类
-func (handler *Handler) RenameCategory(w http.ResponseWriter, r *http.Request, categoryID int64) {
-	userID, ok := currentUserID(r)
+// RenameCategory PUT /api/v1/categories/:id
+func (handler *Handler) RenameCategory(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
+	}
+
+	categoryID, err := parseCategoryID(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "category not found")
 	}
 
 	var req RenameRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid json body")
 	}
 
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" || len(req.Name) > 40 {
-		writeError(w, http.StatusBadRequest, "invalid category name")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid category name")
 	}
 
 	// 校验分类属于当前用户
-	existing, err := handler.store.GetByID(r.Context(), categoryID)
+	existing, err := handler.store.GetByID(c.Request().Context(), categoryID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read category")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read category")
 	}
 	if existing == nil {
-		writeError(w, http.StatusNotFound, "category not found")
-		return
+		return echo.NewHTTPError(http.StatusNotFound, "category not found")
 	}
 	if existing.UserID == nil || *existing.UserID != userID {
-		writeError(w, http.StatusForbidden, "category not owned by current user")
-		return
+		return echo.NewHTTPError(http.StatusForbidden, "category not owned by current user")
 	}
 
-	if err := handler.store.Rename(r.Context(), categoryID, req.Name); err != nil {
+	if err := handler.store.Rename(c.Request().Context(), categoryID, req.Name); err != nil {
 		if errors.Is(err, errors.New("category not found")) {
-			writeError(w, http.StatusNotFound, "category not found")
-			return
+			return echo.NewHTTPError(http.StatusNotFound, "category not found")
 		}
-		writeError(w, http.StatusInternalServerError, "failed to rename category")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to rename category")
 	}
 
-	updated, err := handler.store.GetByID(r.Context(), categoryID)
+	updated, err := handler.store.GetByID(c.Request().Context(), categoryID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read renamed category")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read renamed category")
 	}
 
-	writeJSON(w, http.StatusOK, updated)
+	return c.JSON(http.StatusOK, updated)
 }
 
-// DeleteCategory 删除自定义分类
+// DeleteCategory DELETE /api/v1/categories/:id
 // 删除前需将该分类下的记录移动到"其他"分类
-func (handler *Handler) DeleteCategory(w http.ResponseWriter, r *http.Request, categoryID int64) {
-	userID, ok := currentUserID(r)
+func (handler *Handler) DeleteCategory(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
 	}
 
-	existing, err := handler.store.GetByID(r.Context(), categoryID)
+	categoryID, err := parseCategoryID(c.Param("id"))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read category")
-		return
+		return echo.NewHTTPError(http.StatusNotFound, "category not found")
+	}
+
+	existing, err := handler.store.GetByID(c.Request().Context(), categoryID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read category")
 	}
 	if existing == nil {
-		writeError(w, http.StatusNotFound, "category not found")
-		return
+		return echo.NewHTTPError(http.StatusNotFound, "category not found")
 	}
 	if existing.UserID == nil || *existing.UserID != userID {
-		writeError(w, http.StatusForbidden, "category not owned by current user")
-		return
+		return echo.NewHTTPError(http.StatusForbidden, "category not owned by current user")
 	}
 
 	// 查找该 scope 下的 "其他" 固定分类作为默认归类
-	other, err := handler.store.GetBySlug(r.Context(), userID, existing.Scope, "other")
+	other, err := handler.store.GetBySlug(c.Request().Context(), userID, existing.Scope, "other")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to resolve default category")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to resolve default category")
 	}
 	if other == nil {
-		writeError(w, http.StatusInternalServerError, "default category not found")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "default category not found")
 	}
 
-	if err := handler.store.Delete(r.Context(), existing, userID, other.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to delete category")
-		return
+	if err := handler.store.Delete(c.Request().Context(), existing, userID, other.ID); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete category")
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	return c.NoContent(http.StatusNoContent)
 }
 
-func categoryIDFromPath(path string) (int64, bool) {
-	const prefix = "/api/v1/categories/"
-	if !strings.HasPrefix(path, prefix) {
-		return 0, false
+// parseCategoryID 从路径参数解析分类 ID
+func parseCategoryID(idText string) (int64, error) {
+	categoryID, err := strconv.ParseInt(idText, 10, 64)
+	if err != nil || categoryID <= 0 {
+		return 0, errors.New("invalid category id")
 	}
-	idStr := strings.TrimSpace(path[len(prefix):])
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil || id <= 0 {
-		return 0, false
-	}
-	return id, true
-}
-
-func currentUserID(r *http.Request) (int64, bool) {
-	return middleware.CurrentUserID(r)
-}
-
-func writeJSON(w http.ResponseWriter, statusCode int, payload any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(statusCode)
-	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		http.Error(w, "failed to encode response", http.StatusInternalServerError)
-	}
-}
-
-func writeError(w http.ResponseWriter, statusCode int, message string) {
-	writeJSON(w, statusCode, map[string]string{"error": message})
+	return categoryID, nil
 }

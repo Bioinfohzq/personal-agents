@@ -10,14 +10,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/labstack/echo/v4"
+
 	"personal-agents/backend/internal/category"
 	"personal-agents/backend/internal/config"
 	"personal-agents/backend/internal/database"
 	"personal-agents/backend/internal/middleware"
 )
-
-// knowledgePathPrefix 单条知识的路由前缀
-const knowledgePathPrefix = "/api/v1/knowledge/"
 
 // isValidCategory 校验分类格式:非空、长度不超过 40、不含空白字符。
 // 前端提供固定分类 + 用户自定义分类,后端只做格式校验,不再维护白名单。
@@ -60,6 +59,11 @@ type KnowledgeRequest struct {
 	Extra        string          `json:"extra"`
 	TemplateType string          `json:"template_type"`
 	Steps        []ProcedureStep `json:"steps"`
+}
+
+// MoveKnowledgeRequest 移动分类请求体（只接收 category_id）
+type MoveKnowledgeRequest struct {
+	CategoryID int64 `json:"category_id"`
 }
 
 // KnowledgeSummary 知识摘要(列表用)
@@ -112,60 +116,26 @@ func NewHandler(store *database.Store, llm config.LLMConfig) *Handler {
 	return &Handler{store: store, categoryStore: category.NewStore(store), llm: llm}
 }
 
-// KnowledgeItems 处理 /api/v1/knowledge 路由(GET 列表 / POST 创建)
-func (handler *Handler) KnowledgeItems(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		handler.ListKnowledgeItems(w, r)
-	case http.MethodPost:
-		handler.CreateKnowledgeItem(w, r)
-	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
-
-// KnowledgeItem 处理 /api/v1/knowledge/{id} 路由(GET / PUT / DELETE)
-func (handler *Handler) KnowledgeItem(w http.ResponseWriter, r *http.Request) {
-	itemID, ok := knowledgeIDFromPath(r.URL.Path)
-	if !ok {
-		writeError(w, http.StatusNotFound, "knowledge item not found")
-		return
-	}
-
-	switch r.Method {
-	case http.MethodGet:
-		handler.GetKnowledgeItem(w, r, itemID)
-	case http.MethodPut:
-		handler.UpdateKnowledgeItem(w, r, itemID)
-	case http.MethodDelete:
-		handler.DeleteKnowledgeItem(w, r, itemID)
-	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
-
-// ListKnowledgeItems 查询当前用户的知识列表
+// ListKnowledgeItems GET /api/v1/knowledge
 // 支持可选 query 参数:
 //
 //	?category_id=1    按分类 ID 过滤
 //	?q=缓存           关键词搜索(title / content / notes / tags / summary)
-func (handler *Handler) ListKnowledgeItems(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+func (handler *Handler) ListKnowledgeItems(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
 	}
 
-	categoryIDStr := strings.TrimSpace(r.URL.Query().Get("category_id"))
-	keyword := strings.TrimSpace(r.URL.Query().Get("q"))
+	categoryIDStr := strings.TrimSpace(c.QueryParam("category_id"))
+	keyword := strings.TrimSpace(c.QueryParam("q"))
 
 	var categoryID int64
 	var filterByCategory bool
 	if categoryIDStr != "" {
 		id, err := strconv.ParseInt(categoryIDStr, 10, 64)
 		if err != nil || id <= 0 {
-			writeError(w, http.StatusBadRequest, "invalid category_id")
-			return
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid category_id")
 		}
 		categoryID = id
 		filterByCategory = true
@@ -174,7 +144,7 @@ func (handler *Handler) ListKnowledgeItems(w http.ResponseWriter, r *http.Reques
 	likePattern := "%" + keyword + "%"
 
 	rows, err := handler.store.DB().QueryContext(
-		r.Context(),
+		c.Request().Context(),
 		`SELECT ki.id, ki.title, ki.category_id, c.name, c.slug, ki.sub_category, ki.tags, ki.summary, ki.template_type, ki.created_at, ki.updated_at
 		 FROM knowledge_items ki
 		 JOIN categories c ON c.id = ki.category_id
@@ -187,8 +157,7 @@ func (handler *Handler) ListKnowledgeItems(w http.ResponseWriter, r *http.Reques
 		keyword, likePattern, likePattern, likePattern, likePattern, likePattern,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to query knowledge items")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to query knowledge items")
 	}
 	defer rows.Close()
 
@@ -196,33 +165,29 @@ func (handler *Handler) ListKnowledgeItems(w http.ResponseWriter, r *http.Reques
 	for rows.Next() {
 		var record knowledgeRecord
 		if err := rows.Scan(&record.ID, &record.Title, &record.CategoryID, &record.CategoryName, &record.CategorySlug, &record.SubCategory, &record.Tags, &record.Summary, &record.TemplateType, &record.CreatedAt, &record.UpdatedAt); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to read knowledge item")
-			return
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to read knowledge item")
 		}
 		items = append(items, record.summary())
 	}
 	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read knowledge items")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read knowledge items")
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	return c.JSON(http.StatusOK, map[string]any{
 		"items": items,
 	})
 }
 
-// CreateKnowledgeItem 创建知识条目
-func (handler *Handler) CreateKnowledgeItem(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+// CreateKnowledgeItem POST /api/v1/knowledge
+func (handler *Handler) CreateKnowledgeItem(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
 	}
 
 	var request KnowledgeRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid json body")
 	}
 
 	request.normalize()
@@ -230,40 +195,33 @@ func (handler *Handler) CreateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 		request.TemplateType = "article"
 	}
 	if !isValidTemplateType(request.TemplateType) {
-		writeError(w, http.StatusBadRequest, "invalid template_type")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid template_type")
 	}
-	if request.Title == "" || request.CategoryID <= 0 {
-		writeError(w, http.StatusBadRequest, "title and category_id are required")
-		return
+	if request.CategoryID <= 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "category_id is required")
 	}
 	if request.TemplateType == "article" && request.Content == "" {
-		writeError(w, http.StatusBadRequest, "content is required for article template")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "content is required for article template")
 	}
 	if request.TemplateType == "procedure" && len(request.Steps) == 0 {
-		writeError(w, http.StatusBadRequest, "steps are required for procedure template")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "steps are required for procedure template")
 	}
 
-	if err := handler.validateCategoryID(r.Context(), userID, request.CategoryID); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid category_id")
-		return
+	if err := handler.validateCategoryID(c.Request().Context(), userID, request.CategoryID); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid category_id")
 	}
 
 	if err := request.validateExtra(); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	stepsJSON, err := json.Marshal(request.Steps)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid steps")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid steps")
 	}
 
 	result, err := handler.store.DB().ExecContext(
-		r.Context(),
+		c.Request().Context(),
 		`INSERT INTO knowledge_items (user_id, title, category_id, sub_category, tags, summary, content, notes, reference_url, extra, template_type, steps)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		userID,
@@ -280,58 +238,60 @@ func (handler *Handler) CreateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 		nullableString(string(stepsJSON)),
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create knowledge item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create knowledge item")
 	}
 
 	itemID, err := result.LastInsertId()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read created knowledge item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read created knowledge item")
 	}
 
-	detail, err := handler.findKnowledgeDetail(r, userID, itemID)
+	detail, err := handler.findKnowledgeDetail(c.Request().Context(), userID, itemID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read created knowledge item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read created knowledge item")
 	}
 
-	writeJSON(w, http.StatusCreated, detail)
+	return c.JSON(http.StatusCreated, detail)
 }
 
-// GetKnowledgeItem 获取单条知识详情
-func (handler *Handler) GetKnowledgeItem(w http.ResponseWriter, r *http.Request, itemID int64) {
-	userID, ok := currentUserID(r)
+// GetKnowledgeItem GET /api/v1/knowledge/:id
+func (handler *Handler) GetKnowledgeItem(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
 	}
 
-	detail, err := handler.findKnowledgeDetail(r, userID, itemID)
+	itemID, err := parseKnowledgeID(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "knowledge item not found")
+	}
+
+	detail, err := handler.findKnowledgeDetail(c.Request().Context(), userID, itemID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "knowledge item not found")
-			return
+			return echo.NewHTTPError(http.StatusNotFound, "knowledge item not found")
 		}
-		writeError(w, http.StatusInternalServerError, "failed to read knowledge item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read knowledge item")
 	}
 
-	writeJSON(w, http.StatusOK, detail)
+	return c.JSON(http.StatusOK, detail)
 }
 
-// UpdateKnowledgeItem 更新知识条目
-func (handler *Handler) UpdateKnowledgeItem(w http.ResponseWriter, r *http.Request, itemID int64) {
-	userID, ok := currentUserID(r)
+// UpdateKnowledgeItem PUT /api/v1/knowledge/:id
+func (handler *Handler) UpdateKnowledgeItem(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
+	}
+
+	itemID, err := parseKnowledgeID(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "knowledge item not found")
 	}
 
 	var request KnowledgeRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid json body")
 	}
 
 	request.normalize()
@@ -339,40 +299,27 @@ func (handler *Handler) UpdateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 		request.TemplateType = "article"
 	}
 	if !isValidTemplateType(request.TemplateType) {
-		writeError(w, http.StatusBadRequest, "invalid template_type")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid template_type")
 	}
-	if request.Title == "" || request.CategoryID <= 0 {
-		writeError(w, http.StatusBadRequest, "title and category_id are required")
-		return
+	if request.CategoryID <= 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "category_id is required")
 	}
-	if request.TemplateType == "article" && request.Content == "" {
-		writeError(w, http.StatusBadRequest, "content is required for article template")
-		return
-	}
-	if request.TemplateType == "procedure" && len(request.Steps) == 0 {
-		writeError(w, http.StatusBadRequest, "steps are required for procedure template")
-		return
-	}
-
-	if err := handler.validateCategoryID(r.Context(), userID, request.CategoryID); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid category_id")
-		return
+	// 更新接口不再强制要求 content / steps 非空（符合 project_memory 中的约束）
+	if err := handler.validateCategoryID(c.Request().Context(), userID, request.CategoryID); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid category_id")
 	}
 
 	if err := request.validateExtra(); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	stepsJSON, err := json.Marshal(request.Steps)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid steps")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid steps")
 	}
 
 	result, err := handler.store.DB().ExecContext(
-		r.Context(),
+		c.Request().Context(),
 		`UPDATE knowledge_items
 		 SET title = ?, category_id = ?, sub_category = ?, tags = ?, summary = ?, content = ?, notes = ?, reference_url = ?, extra = ?, template_type = ?, steps = ?
 		 WHERE id = ? AND user_id = ?`,
@@ -391,73 +338,121 @@ func (handler *Handler) UpdateKnowledgeItem(w http.ResponseWriter, r *http.Reque
 		userID,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update knowledge item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update knowledge item")
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read updated knowledge item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read updated knowledge item")
 	}
 	if rowsAffected == 0 {
-		exists, err := handler.knowledgeExists(r, userID, itemID)
+		exists, err := handler.knowledgeExists(c.Request().Context(), userID, itemID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to read updated knowledge item")
-			return
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to read updated knowledge item")
 		}
 		if !exists {
-			writeError(w, http.StatusNotFound, "knowledge item not found")
-			return
+			return echo.NewHTTPError(http.StatusNotFound, "knowledge item not found")
 		}
 	}
 
-	detail, err := handler.findKnowledgeDetail(r, userID, itemID)
+	detail, err := handler.findKnowledgeDetail(c.Request().Context(), userID, itemID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read updated knowledge item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read updated knowledge item")
 	}
 
-	writeJSON(w, http.StatusOK, detail)
+	return c.JSON(http.StatusOK, detail)
 }
 
-// DeleteKnowledgeItem 删除知识条目
-func (handler *Handler) DeleteKnowledgeItem(w http.ResponseWriter, r *http.Request, itemID int64) {
-	userID, ok := currentUserID(r)
+// DeleteKnowledgeItem DELETE /api/v1/knowledge/:id
+func (handler *Handler) DeleteKnowledgeItem(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
+	}
+
+	itemID, err := parseKnowledgeID(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "knowledge item not found")
 	}
 
 	result, err := handler.store.DB().ExecContext(
-		r.Context(),
+		c.Request().Context(),
 		`DELETE FROM knowledge_items WHERE id = ? AND user_id = ?`,
 		itemID,
 		userID,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to delete knowledge item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete knowledge item")
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read deleted knowledge item")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read deleted knowledge item")
 	}
 	if rowsAffected == 0 {
-		writeError(w, http.StatusNotFound, "knowledge item not found")
-		return
+		return echo.NewHTTPError(http.StatusNotFound, "knowledge item not found")
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	return c.NoContent(http.StatusNoContent)
+}
+
+// MoveKnowledgeCategory POST /api/v1/knowledge/:id/move
+// 专用移动分类接口，只更新 category_id
+func (handler *Handler) MoveKnowledgeCategory(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
+	}
+
+	itemID, err := parseKnowledgeID(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "knowledge item not found")
+	}
+
+	var request MoveKnowledgeRequest
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid json body")
+	}
+
+	if request.CategoryID <= 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "category_id is required and must be > 0")
+	}
+
+	// 校验分类存在且属于当前用户
+	if err := handler.validateCategoryID(c.Request().Context(), userID, request.CategoryID); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid category_id")
+	}
+
+	// 只更新 category_id
+	result, err := handler.store.DB().ExecContext(
+		c.Request().Context(),
+		`UPDATE knowledge_items SET category_id = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+		request.CategoryID,
+		time.Now(),
+		itemID,
+		userID,
+	)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to move category")
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get rows affected")
+	}
+
+	if rowsAffected == 0 {
+		return echo.NewHTTPError(http.StatusNotFound, "knowledge item not found or not owned by current user")
+	}
+
+	return c.NoContent(http.StatusOK)
 }
 
 // findKnowledgeDetail 查询单条知识详情
-func (handler *Handler) findKnowledgeDetail(r *http.Request, userID int64, itemID int64) (KnowledgeDetail, error) {
+func (handler *Handler) findKnowledgeDetail(ctx context.Context, userID int64, itemID int64) (KnowledgeDetail, error) {
 	var record knowledgeRecord
 	row := handler.store.DB().QueryRowContext(
-		r.Context(),
+		ctx,
 		`SELECT ki.id, ki.title, ki.category_id, c.name, c.slug, ki.sub_category, ki.tags, ki.summary, ki.content, ki.notes, ki.reference_url, ki.extra, ki.template_type, ki.steps, ki.created_at, ki.updated_at
 		 FROM knowledge_items ki
 		 JOIN categories c ON c.id = ki.category_id
@@ -475,10 +470,10 @@ func (handler *Handler) findKnowledgeDetail(r *http.Request, userID int64, itemI
 }
 
 // knowledgeExists 检查知识条目是否存在
-func (handler *Handler) knowledgeExists(r *http.Request, userID int64, itemID int64) (bool, error) {
+func (handler *Handler) knowledgeExists(ctx context.Context, userID int64, itemID int64) (bool, error) {
 	var count int
 	err := handler.store.DB().QueryRowContext(
-		r.Context(),
+		ctx,
 		`SELECT COUNT(*) FROM knowledge_items WHERE id = ? AND user_id = ?`,
 		itemID,
 		userID,
@@ -557,24 +552,13 @@ func (record knowledgeRecord) detail() KnowledgeDetail {
 	}
 }
 
-// knowledgeIDFromPath 从 URL 路径解析知识条目 ID
-func knowledgeIDFromPath(path string) (int64, bool) {
-	idText := strings.TrimPrefix(path, knowledgePathPrefix)
-	if idText == "" || strings.Contains(idText, "/") {
-		return 0, false
-	}
-
+// parseKnowledgeID 从路径参数解析知识条目 ID
+func parseKnowledgeID(idText string) (int64, error) {
 	itemID, err := strconv.ParseInt(idText, 10, 64)
 	if err != nil || itemID <= 0 {
-		return 0, false
+		return 0, errors.New("invalid knowledge id")
 	}
-
-	return itemID, true
-}
-
-// currentUserID 从请求上下文获取当前用户 ID
-func currentUserID(r *http.Request) (int64, bool) {
-	return middleware.CurrentUserID(r)
+	return itemID, nil
 }
 
 // validateCategoryID 校验分类 ID 属于当前用户且为知识库分类

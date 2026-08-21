@@ -10,14 +10,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/labstack/echo/v4"
+
 	"personal-agents/backend/internal/category"
 	"personal-agents/backend/internal/config"
 	"personal-agents/backend/internal/database"
 	"personal-agents/backend/internal/middleware"
 )
-
-// commandPathPrefix 单条命令的路由前缀
-const commandPathPrefix = "/api/v1/commands/"
 
 // isValidCategory 校验分类格式:非空、长度不超过 40、不含空白字符。
 // 前端提供固定分类 + 用户自定义分类,后端只做格式校验,不再维护白名单。
@@ -48,11 +47,6 @@ type Handler struct {
 }
 
 // CommandRequest 创建/更新命令请求体
-//
-// title 字段合并了"标题"和"一句话含义",所以没有独立的 description 字段。
-// parameters 为三级参数说明,多行文本,每行格式 "参数|全称|含义"(如 "-s|--summarize|只显示总计")。
-// introduction 为命令的详细介绍(官方/通用说明),notes 为个人理解(我的笔记)。
-// template_type 为模板类型: article=单条命令, procedure=流程模板; steps 为流程模板步骤列表。
 type CommandRequest struct {
 	Title        string          `json:"title"`
 	CommandText  string          `json:"command_text"`
@@ -65,6 +59,11 @@ type CommandRequest struct {
 	ReferenceURL string          `json:"reference_url"`
 	TemplateType string          `json:"template_type"`
 	Steps        []ProcedureStep `json:"steps"`
+}
+
+// MoveCommandRequest 移动分类请求体（只接收 category_id）
+type MoveCommandRequest struct {
+	CategoryID int64 `json:"category_id"`
 }
 
 // CommandSummary 命令摘要(列表用,不含 introduction / parameters / notes 正文)
@@ -117,60 +116,26 @@ func NewHandler(store *database.Store, llm config.LLMConfig) *Handler {
 	return &Handler{store: store, categoryStore: category.NewStore(store), llm: llm}
 }
 
-// Commands 处理 /api/v1/commands 路由(GET 列表 / POST 创建)
-func (handler *Handler) Commands(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		handler.ListCommands(w, r)
-	case http.MethodPost:
-		handler.CreateCommand(w, r)
-	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
-
-// Command 处理 /api/v1/commands/{id} 路由(GET / PUT / DELETE)
-func (handler *Handler) Command(w http.ResponseWriter, r *http.Request) {
-	commandID, ok := commandIDFromPath(r.URL.Path)
-	if !ok {
-		writeError(w, http.StatusNotFound, "command not found")
-		return
-	}
-
-	switch r.Method {
-	case http.MethodGet:
-		handler.GetCommand(w, r, commandID)
-	case http.MethodPut:
-		handler.UpdateCommand(w, r, commandID)
-	case http.MethodDelete:
-		handler.DeleteCommand(w, r, commandID)
-	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
-
-// ListCommands 查询当前用户的命令列表
+// ListCommands GET /api/v1/commands
 // 支持可选 query 参数:
 //
 //	?category_id=1    按分类 ID 过滤
 //	?q=grep           关键词搜索(title / command_text / introduction / parameters / notes)
-func (handler *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+func (handler *Handler) ListCommands(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
 	}
 
-	categoryIDStr := strings.TrimSpace(r.URL.Query().Get("category_id"))
-	keyword := strings.TrimSpace(r.URL.Query().Get("q"))
+	categoryIDStr := strings.TrimSpace(c.QueryParam("category_id"))
+	keyword := strings.TrimSpace(c.QueryParam("q"))
 
 	var categoryID int64
 	var filterByCategory bool
 	if categoryIDStr != "" {
 		id, err := strconv.ParseInt(categoryIDStr, 10, 64)
 		if err != nil || id <= 0 {
-			writeError(w, http.StatusBadRequest, "invalid category_id")
-			return
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid category_id")
 		}
 		categoryID = id
 		filterByCategory = true
@@ -179,7 +144,7 @@ func (handler *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
 	likePattern := "%" + keyword + "%"
 
 	rows, err := handler.store.DB().QueryContext(
-		r.Context(),
+		c.Request().Context(),
 		`SELECT c.id, c.title, c.command_text, c.category_id, cat.name, cat.slug, c.sub_category, c.template_type, c.created_at, c.updated_at
 		 FROM commands c
 		 JOIN categories cat ON cat.id = c.category_id
@@ -192,8 +157,7 @@ func (handler *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
 		keyword, likePattern, likePattern, likePattern, likePattern, likePattern,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to query commands")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to query commands")
 	}
 	defer rows.Close()
 
@@ -201,33 +165,29 @@ func (handler *Handler) ListCommands(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var record commandRecord
 		if err := rows.Scan(&record.ID, &record.Title, &record.CommandText, &record.CategoryID, &record.CategoryName, &record.CategorySlug, &record.SubCategory, &record.TemplateType, &record.CreatedAt, &record.UpdatedAt); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to read command")
-			return
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to read command")
 		}
 		commands = append(commands, record.summary())
 	}
 	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read commands")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read commands")
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	return c.JSON(http.StatusOK, map[string]any{
 		"commands": commands,
 	})
 }
 
-// CreateCommand 创建命令
-func (handler *Handler) CreateCommand(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+// CreateCommand POST /api/v1/commands
+func (handler *Handler) CreateCommand(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
 	}
 
 	var request CommandRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid json body")
 	}
 
 	request.normalize()
@@ -235,35 +195,29 @@ func (handler *Handler) CreateCommand(w http.ResponseWriter, r *http.Request) {
 		request.TemplateType = "article"
 	}
 	if !isValidTemplateType(request.TemplateType) {
-		writeError(w, http.StatusBadRequest, "invalid template_type")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid template_type")
 	}
-	if request.Title == "" || request.CategoryID <= 0 {
-		writeError(w, http.StatusBadRequest, "title and category_id are required")
-		return
+	if request.CategoryID <= 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "category_id is required")
 	}
 	if request.TemplateType == "article" && request.CommandText == "" {
-		writeError(w, http.StatusBadRequest, "command_text is required for article template")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "command_text is required for article template")
 	}
 	if request.TemplateType == "procedure" && len(request.Steps) == 0 {
-		writeError(w, http.StatusBadRequest, "steps are required for procedure template")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "steps are required for procedure template")
 	}
 
-	if err := handler.validateCategoryID(r.Context(), userID, request.CategoryID); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid category_id")
-		return
+	if err := handler.validateCategoryID(c.Request().Context(), userID, request.CategoryID); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid category_id")
 	}
 
 	stepsJSON, err := json.Marshal(request.Steps)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid steps")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid steps")
 	}
 
 	result, err := handler.store.DB().ExecContext(
-		r.Context(),
+		c.Request().Context(),
 		`INSERT INTO commands (user_id, title, command_text, category_id, sub_category, introduction, parameters, scenarios, notes, reference_url, template_type, steps)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		userID,
@@ -280,58 +234,60 @@ func (handler *Handler) CreateCommand(w http.ResponseWriter, r *http.Request) {
 		nullableString(string(stepsJSON)),
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create command")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create command")
 	}
 
 	commandID, err := result.LastInsertId()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read created command")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read created command")
 	}
 
-	detail, err := handler.findCommandDetail(r, userID, commandID)
+	detail, err := handler.findCommandDetail(c.Request().Context(), userID, commandID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read created command")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read created command")
 	}
 
-	writeJSON(w, http.StatusCreated, detail)
+	return c.JSON(http.StatusCreated, detail)
 }
 
-// GetCommand 获取单条命令详情(含 introduction / parameters / notes)
-func (handler *Handler) GetCommand(w http.ResponseWriter, r *http.Request, commandID int64) {
-	userID, ok := currentUserID(r)
+// GetCommand GET /api/v1/commands/:id
+func (handler *Handler) GetCommand(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
 	}
 
-	detail, err := handler.findCommandDetail(r, userID, commandID)
+	commandID, err := parseCommandID(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "command not found")
+	}
+
+	detail, err := handler.findCommandDetail(c.Request().Context(), userID, commandID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "command not found")
-			return
+			return echo.NewHTTPError(http.StatusNotFound, "command not found")
 		}
-		writeError(w, http.StatusInternalServerError, "failed to read command")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read command")
 	}
 
-	writeJSON(w, http.StatusOK, detail)
+	return c.JSON(http.StatusOK, detail)
 }
 
-// UpdateCommand 更新命令
-func (handler *Handler) UpdateCommand(w http.ResponseWriter, r *http.Request, commandID int64) {
-	userID, ok := currentUserID(r)
+// UpdateCommand PUT /api/v1/commands/:id
+func (handler *Handler) UpdateCommand(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
+	}
+
+	commandID, err := parseCommandID(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "command not found")
 	}
 
 	var request CommandRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid json body")
 	}
 
 	request.normalize()
@@ -339,35 +295,23 @@ func (handler *Handler) UpdateCommand(w http.ResponseWriter, r *http.Request, co
 		request.TemplateType = "article"
 	}
 	if !isValidTemplateType(request.TemplateType) {
-		writeError(w, http.StatusBadRequest, "invalid template_type")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid template_type")
 	}
-	if request.Title == "" || request.CategoryID <= 0 {
-		writeError(w, http.StatusBadRequest, "title and category_id are required")
-		return
+	if request.CategoryID <= 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "category_id is required")
 	}
-	if request.TemplateType == "article" && request.CommandText == "" {
-		writeError(w, http.StatusBadRequest, "command_text is required for article template")
-		return
-	}
-	if request.TemplateType == "procedure" && len(request.Steps) == 0 {
-		writeError(w, http.StatusBadRequest, "steps are required for procedure template")
-		return
-	}
-
-	if err := handler.validateCategoryID(r.Context(), userID, request.CategoryID); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid category_id")
-		return
+	// 更新接口不再强制要求 command_text / steps 非空（符合 project_memory 中的约束）
+	if err := handler.validateCategoryID(c.Request().Context(), userID, request.CategoryID); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid category_id")
 	}
 
 	stepsJSON, err := json.Marshal(request.Steps)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid steps")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid steps")
 	}
 
 	result, err := handler.store.DB().ExecContext(
-		r.Context(),
+		c.Request().Context(),
 		`UPDATE commands
 		 SET title = ?, command_text = ?, category_id = ?, sub_category = ?, introduction = ?, parameters = ?, scenarios = ?, notes = ?, reference_url = ?, template_type = ?, steps = ?
 		 WHERE id = ? AND user_id = ?`,
@@ -386,73 +330,121 @@ func (handler *Handler) UpdateCommand(w http.ResponseWriter, r *http.Request, co
 		userID,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update command")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update command")
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read updated command")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read updated command")
 	}
 	if rowsAffected == 0 {
-		exists, err := handler.commandExists(r, userID, commandID)
+		exists, err := handler.commandExists(c.Request().Context(), userID, commandID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to read updated command")
-			return
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to read updated command")
 		}
 		if !exists {
-			writeError(w, http.StatusNotFound, "command not found")
-			return
+			return echo.NewHTTPError(http.StatusNotFound, "command not found")
 		}
 	}
 
-	detail, err := handler.findCommandDetail(r, userID, commandID)
+	detail, err := handler.findCommandDetail(c.Request().Context(), userID, commandID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read updated command")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read updated command")
 	}
 
-	writeJSON(w, http.StatusOK, detail)
+	return c.JSON(http.StatusOK, detail)
 }
 
-// DeleteCommand 删除命令
-func (handler *Handler) DeleteCommand(w http.ResponseWriter, r *http.Request, commandID int64) {
-	userID, ok := currentUserID(r)
+// DeleteCommand DELETE /api/v1/commands/:id
+func (handler *Handler) DeleteCommand(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
+	}
+
+	commandID, err := parseCommandID(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "command not found")
 	}
 
 	result, err := handler.store.DB().ExecContext(
-		r.Context(),
+		c.Request().Context(),
 		`DELETE FROM commands WHERE id = ? AND user_id = ?`,
 		commandID,
 		userID,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to delete command")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete command")
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read deleted command")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read deleted command")
 	}
 	if rowsAffected == 0 {
-		writeError(w, http.StatusNotFound, "command not found")
-		return
+		return echo.NewHTTPError(http.StatusNotFound, "command not found")
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	return c.NoContent(http.StatusNoContent)
+}
+
+// MoveCommandCategory POST /api/v1/commands/:id/move
+// 专用移动分类接口，只更新 category_id
+func (handler *Handler) MoveCommandCategory(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
+	}
+
+	commandID, err := parseCommandID(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "command not found")
+	}
+
+	var request MoveCommandRequest
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid json body")
+	}
+
+	if request.CategoryID <= 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "category_id is required and must be > 0")
+	}
+
+	// 校验分类存在且属于当前用户
+	if err := handler.validateCategoryID(c.Request().Context(), userID, request.CategoryID); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid category_id")
+	}
+
+	// 只更新 category_id
+	result, err := handler.store.DB().ExecContext(
+		c.Request().Context(),
+		`UPDATE commands SET category_id = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+		request.CategoryID,
+		time.Now(),
+		commandID,
+		userID,
+	)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to move category")
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to get rows affected")
+	}
+
+	if rowsAffected == 0 {
+		return echo.NewHTTPError(http.StatusNotFound, "command item not found or not owned by current user")
+	}
+
+	return c.NoContent(http.StatusOK)
 }
 
 // findCommandDetail 查询单条命令详情(含 introduction / parameters / notes / steps)
-func (handler *Handler) findCommandDetail(r *http.Request, userID int64, commandID int64) (CommandDetail, error) {
+func (handler *Handler) findCommandDetail(ctx context.Context, userID int64, commandID int64) (CommandDetail, error) {
 	var record commandRecord
 	row := handler.store.DB().QueryRowContext(
-		r.Context(),
+		ctx,
 		`SELECT c.id, c.title, c.command_text, c.category_id, cat.name, cat.slug, c.sub_category, c.introduction, c.parameters, c.scenarios, c.notes, c.reference_url, c.template_type, c.steps, c.created_at, c.updated_at
 		 FROM commands c
 		 JOIN categories cat ON cat.id = c.category_id
@@ -470,10 +462,10 @@ func (handler *Handler) findCommandDetail(r *http.Request, userID int64, command
 }
 
 // commandExists 检查命令是否存在(用于 UpdateCommand 的 0 行更新判断)
-func (handler *Handler) commandExists(r *http.Request, userID int64, commandID int64) (bool, error) {
+func (handler *Handler) commandExists(ctx context.Context, userID int64, commandID int64) (bool, error) {
 	var count int
 	err := handler.store.DB().QueryRowContext(
-		r.Context(),
+		ctx,
 		`SELECT COUNT(*) FROM commands WHERE id = ? AND user_id = ?`,
 		commandID,
 		userID,
@@ -540,24 +532,13 @@ func (record commandRecord) detail() CommandDetail {
 	}
 }
 
-// commandIDFromPath 从 URL 路径解析命令 ID
-func commandIDFromPath(path string) (int64, bool) {
-	idText := strings.TrimPrefix(path, commandPathPrefix)
-	if idText == "" || strings.Contains(idText, "/") {
-		return 0, false
-	}
-
+// parseCommandID 从路径参数解析命令 ID
+func parseCommandID(idText string) (int64, error) {
 	commandID, err := strconv.ParseInt(idText, 10, 64)
 	if err != nil || commandID <= 0 {
-		return 0, false
+		return 0, errors.New("invalid command id")
 	}
-
-	return commandID, true
-}
-
-// currentUserID 从请求上下文获取当前用户 ID(由 JWT 中间件注入)
-func currentUserID(r *http.Request) (int64, bool) {
-	return middleware.CurrentUserID(r)
+	return commandID, nil
 }
 
 // validateCategoryID 校验分类 ID 属于当前用户且为命令手册分类

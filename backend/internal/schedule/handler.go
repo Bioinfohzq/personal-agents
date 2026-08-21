@@ -1,20 +1,19 @@
-﻿package schedule
+package schedule
 
 import (
+	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/labstack/echo/v4"
+
 	"personal-agents/backend/internal/database"
 	"personal-agents/backend/internal/middleware"
 )
-
-// schedulePathPrefix 日程单条记录的路由前缀
-const schedulePathPrefix = "/api/v1/schedules/"
 
 // Handler 日程 HTTP 处理器
 type Handler struct {
@@ -79,50 +78,17 @@ func NewHandler(store *database.Store) *Handler {
 	return &Handler{store: store}
 }
 
-// Schedules 处理 /api/v1/schedules 路由(GET 列表 / POST 创建)
-func (handler *Handler) Schedules(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		handler.ListSchedules(w, r)
-	case http.MethodPost:
-		handler.CreateSchedule(w, r)
-	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
-
-// Schedule 处理 /api/v1/schedules/{id} 路由(GET / PUT / DELETE)
-func (handler *Handler) Schedule(w http.ResponseWriter, r *http.Request) {
-	scheduleID, ok := scheduleIDFromPath(r.URL.Path)
-	if !ok {
-		writeError(w, http.StatusNotFound, "schedule not found")
-		return
-	}
-
-	switch r.Method {
-	case http.MethodGet:
-		handler.GetSchedule(w, r, scheduleID)
-	case http.MethodPut:
-		handler.UpdateSchedule(w, r, scheduleID)
-	case http.MethodDelete:
-		handler.DeleteSchedule(w, r, scheduleID)
-	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
-
-// ListSchedules 查询当前用户的日程列表
+// ListSchedules GET /api/v1/schedules
 // 支持可选 query 参数 ?start=YYYY-MM-DD&end=YYYY-MM-DD 过滤时间范围
-func (handler *Handler) ListSchedules(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+func (handler *Handler) ListSchedules(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
 	}
 
 	// 解析可选的时间范围过滤参数
-	startStr := r.URL.Query().Get("start")
-	endStr := r.URL.Query().Get("end")
+	startStr := c.QueryParam("start")
+	endStr := c.QueryParam("end")
 
 	var rows *sql.Rows
 	var err error
@@ -131,19 +97,17 @@ func (handler *Handler) ListSchedules(w http.ResponseWriter, r *http.Request) {
 		// 带时间范围过滤(日历月视图用:只拉当月日程)
 		startTime, parseErr := time.Parse("2006-01-02", startStr)
 		if parseErr != nil {
-			writeError(w, http.StatusBadRequest, "invalid start date format, expected YYYY-MM-DD")
-			return
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid start date format, expected YYYY-MM-DD")
 		}
 		endTime, parseErr := time.Parse("2006-01-02", endStr)
 		if parseErr != nil {
-			writeError(w, http.StatusBadRequest, "invalid end date format, expected YYYY-MM-DD")
-			return
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid end date format, expected YYYY-MM-DD")
 		}
 		// endTime 设为当天 23:59:59,包含整天
 		endTime = endTime.Add(24*time.Hour - time.Second)
 
 		rows, err = handler.store.DB().QueryContext(
-			r.Context(),
+			c.Request().Context(),
 			`SELECT id, title, start_time, end_time, location, created_at, updated_at
 			 FROM schedules
 			 WHERE user_id = ? AND start_time >= ? AND start_time <= ?
@@ -153,7 +117,7 @@ func (handler *Handler) ListSchedules(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// 不带过滤,返回全部日程
 		rows, err = handler.store.DB().QueryContext(
-			r.Context(),
+			c.Request().Context(),
 			`SELECT id, title, start_time, end_time, location, created_at, updated_at
 			 FROM schedules
 			 WHERE user_id = ?
@@ -163,8 +127,7 @@ func (handler *Handler) ListSchedules(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to query schedules")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to query schedules")
 	}
 	defer rows.Close()
 
@@ -172,60 +135,52 @@ func (handler *Handler) ListSchedules(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var record scheduleRecord
 		if err := rows.Scan(&record.ID, &record.Title, &record.StartTime, &record.EndTime, &record.Location, &record.CreatedAt, &record.UpdatedAt); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to read schedule")
-			return
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to read schedule")
 		}
 		schedules = append(schedules, record.summary())
 	}
 	if err := rows.Err(); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read schedules")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read schedules")
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	return c.JSON(http.StatusOK, map[string]any{
 		"schedules": schedules,
 	})
 }
 
-// CreateSchedule 创建日程
-func (handler *Handler) CreateSchedule(w http.ResponseWriter, r *http.Request) {
-	userID, ok := currentUserID(r)
+// CreateSchedule POST /api/v1/schedules
+func (handler *Handler) CreateSchedule(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
 	}
 
 	var request CreateScheduleRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid json body")
 	}
 
 	request.normalize()
 	if request.Title == "" || request.StartTime == "" || request.EndTime == "" {
-		writeError(w, http.StatusBadRequest, "title, start_time and end_time are required")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "title, start_time and end_time are required")
 	}
 
 	startTime, err := time.Parse(time.RFC3339, request.StartTime)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid start_time format, expected RFC3339")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid start_time format, expected RFC3339")
 	}
 
 	endTime, err := time.Parse(time.RFC3339, request.EndTime)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid end_time format, expected RFC3339")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid end_time format, expected RFC3339")
 	}
 
 	if endTime.Before(startTime) {
-		writeError(w, http.StatusBadRequest, "end_time must be after start_time")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "end_time must be after start_time")
 	}
 
 	result, err := handler.store.DB().ExecContext(
-		r.Context(),
+		c.Request().Context(),
 		`INSERT INTO schedules (user_id, title, description, start_time, end_time, location)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
 		userID,
@@ -236,85 +191,83 @@ func (handler *Handler) CreateSchedule(w http.ResponseWriter, r *http.Request) {
 		nullableString(request.Location),
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create schedule")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create schedule")
 	}
 
 	scheduleID, err := result.LastInsertId()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read created schedule")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read created schedule")
 	}
 
-	detail, err := handler.findScheduleDetail(r, userID, scheduleID)
+	detail, err := handler.findScheduleDetail(c.Request().Context(), userID, scheduleID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read created schedule")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read created schedule")
 	}
 
-	writeJSON(w, http.StatusCreated, detail)
+	return c.JSON(http.StatusCreated, detail)
 }
 
-// GetSchedule 获取单条日程详情
-func (handler *Handler) GetSchedule(w http.ResponseWriter, r *http.Request, scheduleID int64) {
-	userID, ok := currentUserID(r)
+// GetSchedule GET /api/v1/schedules/:id
+func (handler *Handler) GetSchedule(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
 	}
 
-	detail, err := handler.findScheduleDetail(r, userID, scheduleID)
+	scheduleID, err := parseScheduleID(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "schedule not found")
+	}
+
+	detail, err := handler.findScheduleDetail(c.Request().Context(), userID, scheduleID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "schedule not found")
-			return
+			return echo.NewHTTPError(http.StatusNotFound, "schedule not found")
 		}
-		writeError(w, http.StatusInternalServerError, "failed to read schedule")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read schedule")
 	}
 
-	writeJSON(w, http.StatusOK, detail)
+	return c.JSON(http.StatusOK, detail)
 }
 
-// UpdateSchedule 更新日程
-func (handler *Handler) UpdateSchedule(w http.ResponseWriter, r *http.Request, scheduleID int64) {
-	userID, ok := currentUserID(r)
+// UpdateSchedule PUT /api/v1/schedules/:id
+func (handler *Handler) UpdateSchedule(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
+	}
+
+	scheduleID, err := parseScheduleID(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "schedule not found")
 	}
 
 	var request UpdateScheduleRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid json body")
 	}
 
 	request.normalize()
 	if request.Title == "" || request.StartTime == "" || request.EndTime == "" {
-		writeError(w, http.StatusBadRequest, "title, start_time and end_time are required")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "title, start_time and end_time are required")
 	}
 
 	startTime, err := time.Parse(time.RFC3339, request.StartTime)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid start_time format, expected RFC3339")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid start_time format, expected RFC3339")
 	}
 
 	endTime, err := time.Parse(time.RFC3339, request.EndTime)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid end_time format, expected RFC3339")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid end_time format, expected RFC3339")
 	}
 
 	if endTime.Before(startTime) {
-		writeError(w, http.StatusBadRequest, "end_time must be after start_time")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "end_time must be after start_time")
 	}
 
 	result, err := handler.store.DB().ExecContext(
-		r.Context(),
+		c.Request().Context(),
 		`UPDATE schedules
 		 SET title = ?, description = ?, start_time = ?, end_time = ?, location = ?
 		 WHERE id = ? AND user_id = ?`,
@@ -327,74 +280,70 @@ func (handler *Handler) UpdateSchedule(w http.ResponseWriter, r *http.Request, s
 		userID,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update schedule")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update schedule")
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read updated schedule")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read updated schedule")
 	}
 	if rowsAffected == 0 {
 		// 没有更新行,检查是日程不存在还是数据没变化
-		exists, err := handler.scheduleExists(r, userID, scheduleID)
+		exists, err := handler.scheduleExists(c.Request().Context(), userID, scheduleID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to read updated schedule")
-			return
+			return echo.NewHTTPError(http.StatusInternalServerError, "failed to read updated schedule")
 		}
 		if !exists {
-			writeError(w, http.StatusNotFound, "schedule not found")
-			return
+			return echo.NewHTTPError(http.StatusNotFound, "schedule not found")
 		}
 	}
 
-	detail, err := handler.findScheduleDetail(r, userID, scheduleID)
+	detail, err := handler.findScheduleDetail(c.Request().Context(), userID, scheduleID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read updated schedule")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read updated schedule")
 	}
 
-	writeJSON(w, http.StatusOK, detail)
+	return c.JSON(http.StatusOK, detail)
 }
 
-// DeleteSchedule 删除日程
-func (handler *Handler) DeleteSchedule(w http.ResponseWriter, r *http.Request, scheduleID int64) {
-	userID, ok := currentUserID(r)
+// DeleteSchedule DELETE /api/v1/schedules/:id
+func (handler *Handler) DeleteSchedule(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "missing authenticated user")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
+	}
+
+	scheduleID, err := parseScheduleID(c.Param("id"))
+	if err != nil {
+		return echo.NewHTTPError(http.StatusNotFound, "schedule not found")
 	}
 
 	result, err := handler.store.DB().ExecContext(
-		r.Context(),
+		c.Request().Context(),
 		`DELETE FROM schedules WHERE id = ? AND user_id = ?`,
 		scheduleID,
 		userID,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to delete schedule")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete schedule")
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read deleted schedule")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read deleted schedule")
 	}
 	if rowsAffected == 0 {
-		writeError(w, http.StatusNotFound, "schedule not found")
-		return
+		return echo.NewHTTPError(http.StatusNotFound, "schedule not found")
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	return c.NoContent(http.StatusNoContent)
 }
 
 // findScheduleDetail 查询单条日程详情(含描述)
-func (handler *Handler) findScheduleDetail(r *http.Request, userID int64, scheduleID int64) (ScheduleDetail, error) {
+func (handler *Handler) findScheduleDetail(ctx context.Context, userID int64, scheduleID int64) (ScheduleDetail, error) {
 	var record scheduleRecord
 	row := handler.store.DB().QueryRowContext(
-		r.Context(),
+		ctx,
 		`SELECT id, title, description, start_time, end_time, location, created_at, updated_at
 		 FROM schedules
 		 WHERE id = ? AND user_id = ?
@@ -411,10 +360,10 @@ func (handler *Handler) findScheduleDetail(r *http.Request, userID int64, schedu
 }
 
 // scheduleExists 检查日程是否存在(用于 UpdateSchedule 的 0 行更新判断)
-func (handler *Handler) scheduleExists(r *http.Request, userID int64, scheduleID int64) (bool, error) {
+func (handler *Handler) scheduleExists(ctx context.Context, userID int64, scheduleID int64) (bool, error) {
 	var count int
 	err := handler.store.DB().QueryRowContext(
-		r.Context(),
+		ctx,
 		`SELECT COUNT(*) FROM schedules WHERE id = ? AND user_id = ?`,
 		scheduleID,
 		userID,
@@ -466,24 +415,13 @@ func (record scheduleRecord) detail() ScheduleDetail {
 	}
 }
 
-// scheduleIDFromPath 从 URL 路径中解析日程 ID
-func scheduleIDFromPath(path string) (int64, bool) {
-	idText := strings.TrimPrefix(path, schedulePathPrefix)
-	if idText == "" || strings.Contains(idText, "/") {
-		return 0, false
-	}
-
+// parseScheduleID 从路径参数解析日程 ID
+func parseScheduleID(idText string) (int64, error) {
 	scheduleID, err := strconv.ParseInt(idText, 10, 64)
 	if err != nil || scheduleID <= 0 {
-		return 0, false
+		return 0, errors.New("invalid schedule id")
 	}
-
-	return scheduleID, true
-}
-
-// currentUserID 从请求上下文获取当前用户 ID(由 JWT 中间件注入)
-func currentUserID(r *http.Request) (int64, bool) {
-	return middleware.CurrentUserID(r)
+	return scheduleID, nil
 }
 
 // nullableString 将字符串转为 sql.NullString(空字符串 → NULL)

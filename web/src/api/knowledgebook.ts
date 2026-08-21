@@ -73,6 +73,19 @@ export async function deleteKnowledgeItem(token: string, itemId: number): Promis
   await assertBusinessResponse(response, '删除知识失败');
 }
 
+// moveKnowledgeCategory 移动知识条目到指定分类（专用接口）
+export async function moveKnowledgeCategory(
+  token: string,
+  itemId: number,
+  categoryId: number,
+): Promise<void> {
+  const response = await businessFetch(token, `/api/v1/knowledge/${itemId}/move`, {
+    method: 'POST',
+    body: JSON.stringify({ category_id: categoryId }),
+  });
+  await assertBusinessResponse(response, '移动分类失败');
+}
+
 // parseKnowledgeAI 智能解析 AI 解释文本并预填知识字段
 export async function parseKnowledgeAI(
   token: string,

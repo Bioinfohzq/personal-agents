@@ -3,7 +3,6 @@
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/labstack/echo/v4"
 	"golang.org/x/crypto/bcrypt"
 
 	"personal-agents/backend/internal/config"
@@ -68,43 +68,32 @@ func NewHandler(store *database.Store, auth config.AuthConfig) *Handler {
 	}
 }
 
-func (handler *Handler) Login(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
+func (handler *Handler) Login(c echo.Context) error {
 	var request LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid json body")
 	}
 
 	if request.Account == "" || request.Password == "" {
-		writeError(w, http.StatusBadRequest, "account and password are required")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "account and password are required")
 	}
 
 	if handler.auth.JWTSecret == "" || handler.auth.JWTSecret == "<replace_with_a_long_random_secret>" {
-		writeError(w, http.StatusInternalServerError, "auth jwt secret is not configured")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "auth jwt secret is not configured")
 	}
 
-	user, err := handler.findUserByAccount(r.Context(), request.Account)
+	user, err := handler.findUserByAccount(c.Request().Context(), request.Account)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			writeError(w, http.StatusUnauthorized, "invalid account or password")
-			return
+			return echo.NewHTTPError(http.StatusUnauthorized, "invalid account or password")
 		}
 
 		slog.Error("login findUserByAccount failed", "account", request.Account, "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to query user")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to query user")
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(request.Password)); err != nil {
-		writeError(w, http.StatusUnauthorized, "invalid account or password")
-		return
+		return echo.NewHTTPError(http.StatusUnauthorized, "invalid account or password")
 	}
 
 	// SignToken 签发 JWT，包含用户 ID、用户名、手机号、邮箱
@@ -117,11 +106,10 @@ func (handler *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: time.Now().Add(ttl).Unix(),
 	}, handler.auth.JWTSecret)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to sign token")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to sign token")
 	}
 
-	writeJSON(w, http.StatusOK, LoginResponse{
+	return c.JSON(http.StatusOK, LoginResponse{
 		Token: token,
 		User: UserProfile{
 			ID:       user.ID,
@@ -133,28 +121,20 @@ func (handler *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (handler *Handler) Register(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
+func (handler *Handler) Register(c echo.Context) error {
 	var request RegisterRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid json body")
 	}
 
 	// 去空格后校验：账号和密码都必填
 	account := strings.TrimSpace(request.Account)
 	if account == "" || request.Password == "" {
-		writeError(w, http.StatusBadRequest, "account and password are required")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "account and password are required")
 	}
 
 	if len(request.Password) < 8 {
-		writeError(w, http.StatusBadRequest, "password must be at least 8 characters")
-		return
+		return echo.NewHTTPError(http.StatusBadRequest, "password must be at least 8 characters")
 	}
 
 	// 根据账号格式自动判断类型：手机号 / 邮箱 / 用户名
@@ -171,19 +151,17 @@ func (handler *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if handler.auth.JWTSecret == "" || handler.auth.JWTSecret == "<replace_with_a_long_random_secret>" {
-		writeError(w, http.StatusInternalServerError, "auth jwt secret is not configured")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "auth jwt secret is not configured")
 	}
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(request.Password), bcrypt.DefaultCost)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to hash password")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to hash password")
 	}
 
 	// 插入用户记录：只填充对应类型的列，其余为 NULL
 	result, err := handler.store.DB().ExecContext(
-		r.Context(),
+		c.Request().Context(),
 		`INSERT INTO users (username, phone, email, password_hash) VALUES (?, ?, ?, ?)`,
 		nilOrString(username),
 		nilOrString(phone),
@@ -192,18 +170,15 @@ func (handler *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		if isDuplicateEntry(err) {
-			writeError(w, http.StatusConflict, "account already exists")
-			return
+			return echo.NewHTTPError(http.StatusConflict, "account already exists")
 		}
 
-		writeError(w, http.StatusInternalServerError, "failed to create user")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create user")
 	}
 
 	userID, err := result.LastInsertId()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read created user")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read created user")
 	}
 
 	// 构造 userRecord 用于签发 token
@@ -216,11 +191,10 @@ func (handler *Handler) Register(w http.ResponseWriter, r *http.Request) {
 
 	response, err := handler.buildLoginResponse(user)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to sign token")
-		return
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to sign token")
 	}
 
-	writeJSON(w, http.StatusCreated, response)
+	return c.JSON(http.StatusCreated, response)
 }
 
 // findUserByAccount 按账号查询用户，支持用户名 / 手机号 / 邮箱三种类型

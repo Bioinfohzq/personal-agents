@@ -73,6 +73,19 @@ export async function deleteCommand(token: string, commandId: number): Promise<v
   await assertBusinessResponse(response, '删除命令失败');
 }
 
+// moveCommandCategory 移动命令条目到指定分类（专用接口）
+export async function moveCommandCategory(
+  token: string,
+  commandId: number,
+  categoryId: number,
+): Promise<void> {
+  const response = await businessFetch(token, `/api/v1/commands/${commandId}/move`, {
+    method: 'POST',
+    body: JSON.stringify({ category_id: categoryId }),
+  });
+  await assertBusinessResponse(response, '移动分类失败');
+}
+
 // parseCommandAI 智能解析 AI 解释文本并预填命令字段
 export async function parseCommandAI(
   token: string,
