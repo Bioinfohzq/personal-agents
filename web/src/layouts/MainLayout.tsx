@@ -65,7 +65,11 @@ export function MainLayout() {
    */
   const fetchThreads = useCallback(async () => {
     try {
-      const results = await client.threads.search({ limit: 50 });
+      const results = await client.threads.search({
+        limit: 50,
+        // 显式请求 metadata 字段(包含会话标题等自定义数据)
+        select: ['thread_id', 'created_at', 'updated_at', 'metadata'],
+      });
       setThreads(results as Thread[]);
     } catch (err) {
       console.error('Failed to fetch threads:', err);
@@ -116,7 +120,10 @@ export function MainLayout() {
       // 如果删除的是当前正在查看的会话
       if (threadId === currentThreadId) {
         // 拉取最新列表,导航到最近一条或新建会话
-        const results = await client.threads.search({ limit: 50 });
+        const results = await client.threads.search({
+          limit: 50,
+          select: ['thread_id', 'created_at', 'updated_at', 'metadata'],
+        });
         if (results.length > 0) {
           navigate(`/chat/${results[0].thread_id}`, { replace: true });
         } else {

@@ -9,5 +9,12 @@ export interface Message {
 export interface Thread {
   thread_id: string;
   updated_at?: string;
+  metadata?: {
+    title?: string;
+    [key: string]: any;
+  };
+  values?: {
+    messages?: any[];
+  } | null;
   [key: string]: any;
 }

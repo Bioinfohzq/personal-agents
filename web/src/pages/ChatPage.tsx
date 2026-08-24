@@ -79,6 +79,15 @@ export function ChatPage() {
   // ========== 工具函数:LangGraph 消息格式转换 ==========
 
   /**
+   * 从用户首条消息生成会话标题:截取前20个字符,超过加省略号
+   * 去掉换行和多余空白,避免标题显示异常
+   */
+  const generateTitle = (text: string): string => {
+    const cleaned = text.replace(/\s+/g, ' ').trim();
+    return cleaned.length > 20 ? cleaned.slice(0, 20) + '…' : cleaned;
+  };
+
+  /**
    * 从消息 chunk 中提取文本内容(兼容 string 和 content-block 数组格式)
    */
   const extractText = (content: any): string => {
@@ -241,6 +250,11 @@ export function ChatPage() {
     // 加发送锁:防止 setInput('') 后 IME compositionend 等事件将脏值写回输入框
     isSendingRef.current = true;
     const sentContent = input.trim();
+
+    // 判断这是不是新会话的第一条用户消息(用于自动生成标题)
+    // 读取当前 messages 状态中 user 角色消息的数量:0 条说明是首次对话
+    const prevUserMsgCount = messages.filter(m => m.role === 'user').length;
+    const wasFirstMessage = prevUserMsgCount === 0;
 
     const userMsgId = `user-${Date.now()}`;
     const placeholderId = `thinking-${Date.now()}`;
@@ -495,6 +509,17 @@ export function ChatPage() {
         });
       }
 
+      // 首次对话时自动设置会话标题:用用户第一句话截取前20字
+      if (wasFirstMessage && threadId) {
+        try {
+          await client.threads.update(threadId, {
+            metadata: { title: generateTitle(sentContent) }
+          });
+        } catch (titleErr) {
+          console.warn('设置会话标题失败:', titleErr);
+        }
+      }
+
       // 刷新侧边栏会话列表
       await fetchThreads();
 
@@ -550,6 +575,14 @@ export function ChatPage() {
           setMessages(prev =>
             prev.map(m => ({ ...m, isStreaming: false }))
           );
+        }
+        // 即使被中止,如果是首条消息也尝试设置标题
+        if (wasFirstMessage && threadId) {
+          try {
+            await client.threads.update(threadId, {
+              metadata: { title: generateTitle(sentContent) }
+            });
+          } catch { /* ignore */ }
         }
         await fetchThreads();
         return;

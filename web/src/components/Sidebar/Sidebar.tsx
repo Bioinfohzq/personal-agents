@@ -134,6 +134,8 @@ export function Sidebar({
               threads.map((thread) => {
                 const isActive = thread.thread_id === currentThreadId;
                 const isDeleting = deletingId === thread.thread_id;
+                // 会话标题:优先使用 metadata.title(用户首条消息生成),没有则显示 thread_id 前8位
+                const title = thread.metadata?.title || `会话 ${thread.thread_id.substring(0, 8)}`;
                 return (
                   <div key={thread.thread_id} className="relative group">
                     <Link
@@ -146,7 +148,7 @@ export function Sidebar({
                     >
                       <div className="flex items-center space-x-2.5 text-sm font-medium">
                         <MessageSquare size={14} className={isActive ? 'text-blue-400' : ''} />
-                        <span className="truncate">会话 {thread.thread_id.substring(0, 8)}</span>
+                        <span className="truncate">{title}</span>
                       </div>
                       {thread.updated_at && (
                         <div className="flex items-center space-x-1.5 text-xs opacity-60 pl-6">
