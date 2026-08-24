@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { client } from '../api/client';
 import type { Thread } from '../types/chat';
@@ -24,6 +24,7 @@ export interface MainLayoutContext {
   isLoading: boolean;
   setIsLoading: (loading: boolean) => void;
   fetchThreads: () => Promise<void>;
+  deleteThread: (threadId: string) => Promise<void>;
 }
 
 /**
@@ -71,6 +72,11 @@ export function MainLayout() {
     }
   }, []);
 
+  // 组件挂载时自动拉取历史会话列表,避免侧边栏首次显示为空
+  useEffect(() => {
+    fetchThreads();
+  }, [fetchThreads]);
+
   /**
    * 创建新会话:调 SDK 创建 + 刷新列表 + 导航到新会话路由
    * 导航后 ChatPage 会通过 useParams 检测到 threadId 变化,自动加载会话内容
@@ -98,6 +104,32 @@ export function MainLayout() {
     // 不需要手动 navigate,ProtectedRoute 会自动处理
   }, [logout]);
 
+  /**
+   * 删除会话:调 SDK 删除 + 从列表中移除
+   * 如果删除的是当前正在查看的会话,导航到剩余最近会话或创建新会话
+   */
+  const deleteThread = useCallback(async (threadId: string) => {
+    try {
+      await client.threads.delete(threadId);
+      // 从本地状态中移除已删除的会话,立即更新 UI
+      setThreads((prev) => prev.filter((t) => t.thread_id !== threadId));
+      // 如果删除的是当前正在查看的会话
+      if (threadId === currentThreadId) {
+        // 拉取最新列表,导航到最近一条或新建会话
+        const results = await client.threads.search({ limit: 50 });
+        if (results.length > 0) {
+          navigate(`/chat/${results[0].thread_id}`, { replace: true });
+        } else {
+          const thread = await client.threads.create();
+          navigate(`/chat/${thread.thread_id}`, { replace: true });
+        }
+        setThreads(results as Thread[]);
+      }
+    } catch (err) {
+      console.error('Failed to delete thread:', err);
+    }
+  }, [currentThreadId, navigate]);
+
   // 组装要传给子页面的 context 值
   const outletContext: MainLayoutContext = {
     threads,
@@ -105,6 +137,7 @@ export function MainLayout() {
     isLoading,
     setIsLoading,
     fetchThreads,
+    deleteThread,
   };
 
   return (
@@ -114,6 +147,7 @@ export function MainLayout() {
         isOpen={isSidebarOpen}
         threads={threads}
         currentThreadId={currentThreadId}
+        onDeleteThread={deleteThread}
       />
 
       <div className="flex-1 flex flex-col min-w-0 bg-white">

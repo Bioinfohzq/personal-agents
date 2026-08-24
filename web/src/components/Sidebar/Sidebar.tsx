@@ -1,5 +1,6 @@
-import { Bot, KeyRound, MessageSquare, Clock, CalendarDays, HardDrive, BookOpen } from 'lucide-react';
+import { Bot, KeyRound, MessageSquare, Clock, CalendarDays, HardDrive, BookOpen, Trash2 } from 'lucide-react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
+import { useState } from 'react';
 import type { Thread } from '../../types/chat';
 import { formatDate } from '../../utils/format';
 import { useAuth } from '../../auth/AuthContext';
@@ -24,6 +25,7 @@ interface SidebarProps {
   isOpen: boolean;
   threads: Thread[];
   currentThreadId: string | null;
+  onDeleteThread: (threadId: string) => Promise<void>;
 }
 
 // 导航项配置:每项对应一个路由路径
@@ -39,10 +41,15 @@ export function Sidebar({
   isOpen,
   threads,
   currentThreadId,
+  onDeleteThread,
 }: SidebarProps) {
   // 用 useLocation 判断当前是否在聊天页面,决定是否显示会话列表
   const location = useLocation();
   const isChatView = location.pathname.startsWith('/chat');
+
+  // 删除确认状态:记录当前待删除的 threadId,为 null 时不显示确认
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deletingLoading, setDeletingLoading] = useState(false);
 
   // 从 AuthContext 获取 session,判断是否为访客模式
   // 访客模式下隐藏密码本和日程入口(需要后端 JWT 鉴权)
@@ -53,6 +60,30 @@ export function Sidebar({
   const visibleNavItems = isGuest
     ? NAV_ITEMS.filter((item) => item.to !== '/passwordbook' && item.to !== '/schedule' && item.to !== '/filesystem')
     : NAV_ITEMS;
+
+  // 点击删除按钮:阻止 Link 跳转,进入确认状态
+  const handleDeleteClick = (e: React.MouseEvent, threadId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDeletingId(threadId);
+  };
+
+  // 确认删除:调用父组件的 deleteThread,成功后退出确认状态
+  const confirmDelete = async (e: React.MouseEvent, threadId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDeletingLoading(true);
+    await onDeleteThread(threadId);
+    setDeletingLoading(false);
+    setDeletingId(null);
+  };
+
+  // 取消删除
+  const cancelDelete = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDeletingId(null);
+  };
 
   return (
     <aside
@@ -92,7 +123,7 @@ export function Sidebar({
       {/* 会话列表区:仅在聊天页面显示 */}
       {isChatView && (
         <>
-          <div className="px-4 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+          <div className="px-4 py-4 text-sm font-semibold text-gray-500 tracking-wider">
             最近会话
           </div>
 
@@ -100,28 +131,69 @@ export function Sidebar({
             {threads.length === 0 ? (
               <div className="text-center text-sm text-gray-600 mt-4">暂无历史记录</div>
             ) : (
-              threads.map((thread) => (
-                <Link
-                  key={thread.thread_id}
-                  to={`/chat/${thread.thread_id}`}
-                  className={`w-full text-left px-3 py-3 rounded-xl flex flex-col space-y-1.5 transition-colors ${
-                    thread.thread_id === currentThreadId
-                      ? 'bg-gray-800 text-white shadow-sm'
-                      : 'hover:bg-gray-800 text-gray-400 hover:text-gray-200'
-                  }`}
-                >
-                  <div className="flex items-center space-x-2.5 text-sm font-medium">
-                    <MessageSquare size={14} className={thread.thread_id === currentThreadId ? 'text-blue-400' : ''} />
-                    <span className="truncate">会话 {thread.thread_id.substring(0, 8)}</span>
+              threads.map((thread) => {
+                const isActive = thread.thread_id === currentThreadId;
+                const isDeleting = deletingId === thread.thread_id;
+                return (
+                  <div key={thread.thread_id} className="relative group">
+                    <Link
+                      to={`/chat/${thread.thread_id}`}
+                      className={`w-full text-left px-3 py-3 rounded-xl flex flex-col space-y-1.5 transition-colors pr-9 ${
+                        isActive
+                          ? 'bg-gray-800 text-white shadow-sm'
+                          : 'hover:bg-gray-800 text-gray-400 hover:text-gray-200'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-2.5 text-sm font-medium">
+                        <MessageSquare size={14} className={isActive ? 'text-blue-400' : ''} />
+                        <span className="truncate">会话 {thread.thread_id.substring(0, 8)}</span>
+                      </div>
+                      {thread.updated_at && (
+                        <div className="flex items-center space-x-1.5 text-xs opacity-60 pl-6">
+                          <Clock size={10} />
+                          <span>{formatDate(thread.updated_at)}</span>
+                        </div>
+                      )}
+                    </Link>
+
+                    {/* 删除按钮:默认隐藏,hover 或确认态时显示 */}
+                    {!isDeleting && (
+                      <button
+                        type="button"
+                        onClick={(e) => handleDeleteClick(e, thread.thread_id)}
+                        className={`absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-gray-500 hover:text-red-400 hover:bg-gray-700 transition-opacity ${
+                          isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                        }`}
+                        title="删除会话"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+
+                    {/* 删除确认态:显示"确认/取消"按钮 */}
+                    {isDeleting && (
+                      <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={(e) => cancelDelete(e)}
+                          disabled={deletingLoading}
+                          className="px-2 py-1 text-xs rounded-md text-gray-400 hover:text-gray-200 hover:bg-gray-700 transition-colors disabled:opacity-50"
+                        >
+                          取消
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => confirmDelete(e, thread.thread_id)}
+                          disabled={deletingLoading}
+                          className="px-2 py-1 text-xs rounded-md bg-red-600 text-white hover:bg-red-500 transition-colors disabled:opacity-50"
+                        >
+                          {deletingLoading ? '...' : '删除'}
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  {thread.updated_at && (
-                    <div className="flex items-center space-x-1.5 text-xs opacity-60 pl-6">
-                      <Clock size={10} />
-                      <span>{formatDate(thread.updated_at)}</span>
-                    </div>
-                  )}
-                </Link>
-              ))
+                );
+              })
             )}
           </div>
         </>
