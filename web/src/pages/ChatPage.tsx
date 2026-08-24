@@ -41,7 +41,7 @@ export function ChatPage() {
 
   // useOutletContext:接收 MainLayout 通过 <Outlet context={...}> 传下来的共享数据
   //   泛型指定为 MainLayoutContext,获得类型提示
-  const { fetchThreads, isLoading, setIsLoading } = useOutletContext<MainLayoutContext>();
+  const { fetchThreads, setIsLoading } = useOutletContext<MainLayoutContext>();
 
   // 页面局部状态:只和当前聊天页面相关,不需要共享给其他页面
   const [messages, setMessages] = useState<Message[]>([]);
@@ -129,26 +129,6 @@ export function ChatPage() {
       const args = tc.args ? JSON.stringify(tc.args) : '';
       return `[调用工具: ${name}${args ? `(${args.length > 100 ? args.slice(0, 100) + '...' : args})` : ''}]`;
     }).join('\n');
-  };
-
-  /**
-   * 将单条 LangGraph 消息转换为前端 Message
-   */
-  const convertLgMsg = (msg: any, fallbackId: string, streaming = false): Message | null => {
-    const role = getRole(msg);
-    if (!role || role === 'user') return null; // user 消息由我们自己管理
-
-    const text = extractText(msg.content);
-    const toolCallText = role === 'agent' ? getToolCallText(msg) : '';
-    const fullContent = text + (text && toolCallText ? '\n' : '') + toolCallText;
-
-    return {
-      id: msg.id || fallbackId,
-      role,
-      content: fullContent,
-      toolName: role === 'tool' ? getToolName(msg) : undefined,
-      isStreaming: streaming,
-    };
   };
 
   // ========== 加载历史会话 ==========
@@ -278,10 +258,8 @@ export function ChatPage() {
 
     // 跟踪本次流中已绑定 LangGraph id 的消息:lgId → localId
     const streamedMsgIds = new Map<string, string>();
-    // 当前"正在流式输出"的气泡 localId(partial chunk 无 lgId,都更新这个气泡)
-    let currentStreamLocalId: string | null = null;
-    // 移除思考占位标记
-    let placeholderRemoved = false;
+    // 当前"正在流式输出"的气泡 localId:一开始就指向思考占位气泡,第一个 partial 到达时直接复用它
+    let currentStreamLocalId: string | null = placeholderId;
 
     // 创建本次请求的 AbortController
     const controller = new AbortController();
@@ -291,10 +269,9 @@ export function ChatPage() {
      * 辅助:在 UI 中更新或新增一条非 user 消息
      *
      * 关键逻辑:
-     *   - partial chunk 通常不带 lgId → 用 currentStreamLocalId 追踪"正在流式的气泡"
-     *   - complete chunk 会带 lgId → 把 lgId 绑定到当前气泡,然后将 currentStreamLocalId 置空
-     *     后续如果又来了新的 partial(说明 agent 在 tool call 后继续输出),
-     *     会创建新的 currentStreamLocalId 气泡
+     *   - 第一个 AI partial 到达时,复用思考占位气泡(isStreaming=true),并把 lgId 绑定给它
+     *   - 后续同 id 的 partial/complete 都更新这个气泡
+     *   - tool 消息作为独立消息插入,之后新的 AI 消息会创建新气泡
      */
     const upsertStreamingMsg = (lgMsg: any, event: string) => {
       const role = getRole(lgMsg);
@@ -311,15 +288,13 @@ export function ChatPage() {
       if (role === 'tool') {
         setMessages(prev => {
           let next = [...prev];
-          if (!placeholderRemoved) {
-            next = next.filter(m => m.id !== placeholderId);
-            placeholderRemoved = true;
-          }
           // tool 消息通常有 id,检查是否已存在
           if (lgId && streamedMsgIds.has(lgId)) {
             const localId = streamedMsgIds.get(lgId)!;
             next = next.map(m => m.id === localId ? { ...m, content, toolName, isStreaming: false } : m);
           } else {
+            // 插入 tool 消息前,确保思考占位被移除(若还在)
+            next = next.filter(m => m.id !== placeholderId);
             const localId = lgId || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
             if (lgId) streamedMsgIds.set(lgId, localId);
             next.push({ id: localId, role: 'tool', content: content || '(工具无输出)', toolName, isStreaming: false });
@@ -347,37 +322,36 @@ export function ChatPage() {
           return next;
         }
 
-        // 情况2:有 currentStreamLocalId → 同一条 AI 消息的流式增量,更新当前气泡
-        if (currentStreamLocalId && !isComplete) {
+        // 情况2:有 currentStreamLocalId(指向思考占位或已创建的气泡)
+        //   → 更新该气泡,如果有 lgId 则绑定
+        if (currentStreamLocalId) {
+          // 如果内容为空且没有 lgId(还在初始化阶段),保留思考状态不动
+          if (!content.trim() && !lgId && !isComplete) {
+            return next;
+          }
           next = next.map(m =>
-            m.id === currentStreamLocalId ? { ...m, content, toolName, isStreaming: true } : m
+            m.id === currentStreamLocalId
+              ? { ...m, content, toolName: toolName || m.toolName, isStreaming: !isComplete }
+              : m
           );
           if (lgId) streamedMsgIds.set(lgId, currentStreamLocalId);
+          if (isComplete) {
+            currentStreamLocalId = null;
+          }
           return next;
         }
 
-        // 情况3:需要新建 AI 气泡
-        //  - partial 开始但内容为空 → 不替换思考占位,等有内容再建(保持思考动画)
-        //  - partial 有内容 / complete 单独到达 → 创建新气泡并移除思考占位
+        // 情况3:没有当前流目标且是新消息 → 创建新气泡
+        // （tool 消息之后可能出现的新 AI 消息会走到这里）
         const hasContent = content.trim().length > 0;
-        if (!isComplete && !hasContent) {
-          // 流式刚开始,还没内容,保留思考占位
+        if (!hasContent && !isComplete) {
           return next;
         }
-
-        // 需要创建实际气泡了,先移除思考占位
-        if (!placeholderRemoved) {
-          next = next.filter(m => m.id !== placeholderId);
-          placeholderRemoved = true;
-        }
-
         const localId = lgId || `stream-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
         if (lgId) streamedMsgIds.set(lgId, localId);
         next.push({ id: localId, role: 'agent', content, toolName, isStreaming: !isComplete });
         if (!isComplete) {
           currentStreamLocalId = localId;
-        } else {
-          currentStreamLocalId = null;
         }
         return next;
       });
@@ -443,20 +417,33 @@ export function ChatPage() {
           const localLgIds = new Set<string>();
           const localContentKeys = new Set<string>();
           const localUserContents = new Set<string>();
+          // 判断占位气泡是否已经被 AI 回复填充(有 lgId 绑定或有内容)
+          const placeholderHasContent =
+            streamedMsgIds.size > 0 ||
+            prev.some(m => m.id === placeholderId && m.content.trim().length > 0);
+
           for (const m of prev) {
             if (m.role === 'user') localUserContents.add(m.content.trim());
-            // 通过 streamedMsgIds 已知哪些 lgId 已被渲染;另外用内容+角色去重
             localContentKeys.add(`${m.role}:${m.content.trim()}`);
           }
           for (const lgId of streamedMsgIds.keys()) localLgIds.add(lgId);
 
-          const merged: Message[] = [...prev];
-          // 清除思考占位和所有 isStreaming 标记
-          const cleaned = merged
-            .filter(m => m.id !== placeholderId)
+          // 清除思考占位(仅当它没被填充实际内容时)和所有 isStreaming 标记
+          const cleaned = prev
+            .filter(m => {
+              // 占位气泡已经填充了内容 → 保留,作为正式 AI 回复
+              if (m.id === placeholderId) return placeholderHasContent;
+              return true;
+            })
             .map(m => ({ ...m, isStreaming: false }));
 
-          // 追加服务端有但本地没有的消息(按服务端顺序插入到最后)
+          // 重新收集清理后的内容指纹(清理后可能去掉了空占位)
+          const cleanedContentKeys = new Set<string>();
+          for (const m of cleaned) {
+            cleanedContentKeys.add(`${m.role}:${m.content.trim()}`);
+          }
+
+          // 追加服务端有但本地没有的消息
           const newMsgs: Message[] = [];
           for (const m of historyMessages) {
             const role = getRole(m);
@@ -469,14 +456,13 @@ export function ChatPage() {
             // 跳过已在本地的 user 消息
             if (role === 'user') {
               if (localUserContents.has(content.trim())) continue;
-              // 也跳过本次发送的内容(可能有 server 分配的不同 id)
               if (sentContent && content.trim() === sentContent.trim()) continue;
             }
 
-            // 跳过已通过 lgId 或内容指纹匹配的消息
+            // 跳过已通过 lgId 绑定过的消息(已渲染在占位气泡或其他气泡中)
             if (m.id && localLgIds.has(m.id)) continue;
             const key = `${role}:${content.trim()}`;
-            if (localContentKeys.has(key)) continue;
+            if (cleanedContentKeys.has(key)) continue;
 
             newMsgs.push({
               id: m.id || `server-${Date.now()}-${newMsgs.length}`,
@@ -485,18 +471,16 @@ export function ChatPage() {
               toolName: role === 'tool' ? getToolName(m) : undefined,
               isStreaming: false,
             });
-            localContentKeys.add(key);
+            cleanedContentKeys.add(key);
           }
 
           return [...cleaned, ...newMsgs];
         });
       } catch (syncErr) {
         console.warn('同步最终消息状态失败:', syncErr);
-        // 同步失败时,至少清除所有 isStreaming 标记和思考占位
+        // 同步失败时,清除所有 isStreaming 标记;保留占位气泡(可能已有内容)
         setMessages(prev =>
-          prev
-            .filter(m => m.id !== placeholderId)
-            .map(m => ({ ...m, isStreaming: false }))
+          prev.map(m => ({ ...m, isStreaming: false }))
         );
       }
 
@@ -524,14 +508,19 @@ export function ChatPage() {
           const historyMessages: any[] = stateValues?.messages || [];
           setMessages(prev => {
             const localLgIds = new Set<string>();
-            const localContentKeys = new Set<string>();
             const localUserContents = new Set<string>();
+            const placeholderHasContent =
+              streamedMsgIds.size > 0 ||
+              prev.some(m => m.id === placeholderId && m.content.trim().length > 0);
             for (const m of prev) {
               if (m.role === 'user') localUserContents.add(m.content.trim());
-              localContentKeys.add(`${m.role}:${m.content.trim()}`);
             }
             for (const lgId of streamedMsgIds.keys()) localLgIds.add(lgId);
-            const cleaned = prev.filter(m => m.id !== placeholderId).map(m => ({ ...m, isStreaming: false }));
+            const cleaned = prev
+              .filter(m => m.id === placeholderId ? placeholderHasContent : true)
+              .map(m => ({ ...m, isStreaming: false }));
+            const cleanedContentKeys = new Set<string>();
+            for (const m of cleaned) cleanedContentKeys.add(`${m.role}:${m.content.trim()}`);
             const newMsgs: Message[] = [];
             for (const m of historyMessages) {
               const role = getRole(m);
@@ -546,20 +535,20 @@ export function ChatPage() {
               }
               if (m.id && localLgIds.has(m.id)) continue;
               const key = `${role}:${content.trim()}`;
-              if (localContentKeys.has(key)) continue;
+              if (cleanedContentKeys.has(key)) continue;
               newMsgs.push({
                 id: m.id || `server-${Date.now()}-${newMsgs.length}`,
                 role, content,
                 toolName: role === 'tool' ? getToolName(m) : undefined,
                 isStreaming: false,
               });
-              localContentKeys.add(key);
+              cleanedContentKeys.add(key);
             }
             return [...cleaned, ...newMsgs];
           });
         } catch {
           setMessages(prev =>
-            prev.filter(m => m.id !== placeholderId).map(m => ({ ...m, isStreaming: false }))
+            prev.map(m => ({ ...m, isStreaming: false }))
           );
         }
         await fetchThreads();
