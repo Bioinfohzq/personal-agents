@@ -27,18 +27,19 @@ type ParseAIRequest struct {
 
 // ParseAIResponse AI 解析结果
 type ParseAIResponse struct {
-	Title        string          `json:"title"`
-	CategoryID   int64           `json:"category_id"`
-	Category     string          `json:"category"`
-	SubCategory  string          `json:"sub_category"`
-	Tags         string          `json:"tags"`
-	Summary      string          `json:"summary"`
-	Content      string          `json:"content"`
-	Notes        string          `json:"notes"`
-	ReferenceURL string          `json:"reference_url"`
-	Extra        string          `json:"extra"`
-	TemplateType string          `json:"template_type"`
-	Steps        []ProcedureStep `json:"steps"`
+	Title        string           `json:"title"`
+	CategoryID   int64            `json:"category_id"`
+	Category     string           `json:"category"`
+	SubCategory  string           `json:"sub_category"`
+	Tags         string           `json:"tags"`
+	Summary      string           `json:"summary"`
+	Content      string           `json:"content"`
+	Notes        string           `json:"notes"`
+	ReferenceURL string           `json:"reference_url"`
+	Extra        string           `json:"extra"`
+	TemplateType string           `json:"template_type"`
+	Steps        []ProcedureStep  `json:"steps"`
+	Comparison   *ComparisonTable `json:"comparison"`
 }
 
 const baseParseAIPrompt = `你是一位知识库整理助手。请根据用户提供的 AI 解释文本,提取并整理成结构化的知识记录。
@@ -160,6 +161,46 @@ const procedurePrompt = `你是一位知识库整理助手。请根据用户提�
   "notes": "",
   "reference_url": "",
   "template_type": "procedure"
+}
+
+以下是用户提供的 AI 解释文本:`
+
+const comparisonPrompt = `你是一位知识库整理助手。请根据用户提供的 AI 解释文本,提取并整理成一个对比表格模板(多列对比的知识笔记)。
+
+要求:
+1. title: 标题,如 "SSE vs WebSocket - 高频对比"。
+2. category: 分类,只能是 "system-path" / "url-resource" / "hardware" / "algorithm" / "other" 之一。
+3. sub_category: 二级分类,只能是一个短语。
+4. tags: 标签,多个标签用逗号分隔。
+5. summary: 50 字以内的核心要点,说明对比目的和结论。
+6. comparison: 对比表格对象,包含:
+   - intro: 基础介绍,对比内容的背景说明、核心结论,可选。
+   - headers: 列标题数组,第一列固定为"对比维度"(或类似),其余为被对比的事物名称。至少 2 列。
+   - rows: 行数据二维数组,每行第一列是维度名称,后面是各列对应的值。至少 3-5 行有实质内容的对比维度。
+   - supplement: 补充说明,额外补充、选型建议、注意事项,可选。
+7. notes: 个人理解或记忆要点,从解释文本中提炼最实用的信息。如果没有,可以留空。
+8. reference_url: 如果文本中包含官方文档/教程链接,提取出来;否则留空。
+9. template_type: 固定输出 "comparison"。
+
+只能输出 JSON,不要任何 Markdown 代码块标记,不要额外说明。JSON 字段如下:
+{
+  "title": "",
+  "category": "",
+  "sub_category": "",
+  "tags": "",
+  "summary": "",
+  "comparison": {
+    "intro": "",
+    "headers": ["对比维度", "A", "B"],
+    "rows": [
+      ["维度1", "A的值", "B的值"],
+      ["维度2", "A的值", "B的值"]
+    ],
+    "supplement": ""
+  },
+  "notes": "",
+  "reference_url": "",
+  "template_type": "comparison"
 }
 
 以下是用户提供的 AI 解释文本:`
@@ -292,17 +333,18 @@ func (handler *Handler) parseWithLLM(ctx context.Context, rawText string, catego
 
 	// LLM 返回的 extra 是 JSON object，先用 RawMessage 接收再转成字符串
 	var rawResult struct {
-		Title        string          `json:"title"`
-		Category     string          `json:"category"`
-		SubCategory  string          `json:"sub_category"`
-		Tags         string          `json:"tags"`
-		Summary      string          `json:"summary"`
-		Content      string          `json:"content"`
-		Notes        string          `json:"notes"`
-		ReferenceURL string          `json:"reference_url"`
-		Extra        json.RawMessage `json:"extra"`
-		TemplateType string          `json:"template_type"`
-		Steps        []ProcedureStep `json:"steps"`
+		Title        string           `json:"title"`
+		Category     string           `json:"category"`
+		SubCategory  string           `json:"sub_category"`
+		Tags         string           `json:"tags"`
+		Summary      string           `json:"summary"`
+		Content      string           `json:"content"`
+		Notes        string           `json:"notes"`
+		ReferenceURL string           `json:"reference_url"`
+		Extra        json.RawMessage  `json:"extra"`
+		TemplateType string           `json:"template_type"`
+		Steps        []ProcedureStep  `json:"steps"`
+		Comparison   *ComparisonTable `json:"comparison"`
 	}
 	if err := json.Unmarshal([]byte(content), &rawResult); err != nil {
 		return nil, fmt.Errorf("failed to parse llm response: %w, content: %s", err, content)
@@ -320,6 +362,7 @@ func (handler *Handler) parseWithLLM(ctx context.Context, rawText string, catego
 		Extra:        strings.TrimSpace(string(rawResult.Extra)),
 		TemplateType: strings.TrimSpace(rawResult.TemplateType),
 		Steps:        rawResult.Steps,
+		Comparison:   rawResult.Comparison,
 	}
 	if result.TemplateType == "" {
 		result.TemplateType = templateType
@@ -328,6 +371,18 @@ func (handler *Handler) parseWithLLM(ctx context.Context, rawText string, catego
 		result.Steps[i].Title = strings.TrimSpace(result.Steps[i].Title)
 		result.Steps[i].Code = strings.TrimSpace(result.Steps[i].Code)
 		result.Steps[i].Note = strings.TrimSpace(result.Steps[i].Note)
+	}
+	if result.Comparison != nil {
+		result.Comparison.Intro = strings.TrimSpace(result.Comparison.Intro)
+		result.Comparison.Supplement = strings.TrimSpace(result.Comparison.Supplement)
+		for i := range result.Comparison.Headers {
+			result.Comparison.Headers[i] = strings.TrimSpace(result.Comparison.Headers[i])
+		}
+		for i := range result.Comparison.Rows {
+			for j := range result.Comparison.Rows[i] {
+				result.Comparison.Rows[i][j] = strings.TrimSpace(result.Comparison.Rows[i][j])
+			}
+		}
 	}
 
 	// 如果 LLM 没返回 category,默认用用户选择的 category,否则 other
@@ -350,6 +405,9 @@ func (handler *Handler) parseWithLLM(ctx context.Context, rawText string, catego
 func buildParsePrompt(category string, templateType string) string {
 	if templateType == "procedure" {
 		return procedurePrompt
+	}
+	if templateType == "comparison" {
+		return comparisonPrompt
 	}
 
 	var extraPrompt string

@@ -9,6 +9,13 @@ import {
 } from 'react';
 import type { FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
+
+/** 根据内容自动调整 textarea 高度 */
+function autoResizeTextarea(el: HTMLTextAreaElement | null) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 'px';
+}
 import {
   Check,
   ChevronRight,
@@ -943,11 +950,15 @@ function ScenarioEditor(props: { value: string; onChange: (value: string) => voi
             )}
           </div>
           <textarea
+            ref={autoResizeTextarea}
             value={scenario.command}
-            onChange={(e) => updateScenario(index, { command: e.target.value })}
+            onChange={(e) => {
+              updateScenario(index, { command: e.target.value });
+              autoResizeTextarea(e.target);
+            }}
             placeholder="在此输入命令和细节..."
-            rows={3}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            rows={1}
+            className="w-full resize-none overflow-hidden rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
         </div>
       ))}
@@ -1028,18 +1039,26 @@ function ProcedureStepEditor(props: {
             )}
           </div>
           <textarea
+            ref={autoResizeTextarea}
             value={step.code}
-            onChange={(e) => updateStep(index, { code: e.target.value })}
+            onChange={(e) => {
+              updateStep(index, { code: e.target.value });
+              autoResizeTextarea(e.target);
+            }}
             placeholder="该步骤要执行的命令或代码(可选)"
-            rows={3}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            rows={1}
+            className="w-full resize-none overflow-hidden rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
           <textarea
+            ref={autoResizeTextarea}
             value={step.note}
-            onChange={(e) => updateStep(index, { note: e.target.value })}
+            onChange={(e) => {
+              updateStep(index, { note: e.target.value });
+              autoResizeTextarea(e.target);
+            }}
             placeholder="补充说明或注意事项(可选)"
-            rows={2}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            rows={1}
+            className="w-full resize-none overflow-hidden rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
         </div>
       ))}
@@ -1618,11 +1637,15 @@ function CommandForm(props: {
           AI 智能预填
         </div>
         <textarea
+          ref={autoResizeTextarea}
           value={aiRawText}
-          onChange={(e) => onAiRawTextChange(e.target.value)}
+          onChange={(e) => {
+            onAiRawTextChange(e.target.value);
+            autoResizeTextarea(e.target);
+          }}
           placeholder="把 AI 对命令的解释全文粘贴到这里,点击解析后会自动预填下方字段..."
-          rows={4}
-          className="w-full rounded-lg border border-indigo-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 bg-white"
+          rows={1}
+          className="w-full resize-none overflow-hidden rounded-lg border border-indigo-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 bg-white"
         />
         {aiError && (
           <div className="text-xs text-red-600">{aiError}</div>
@@ -1698,11 +1721,15 @@ function CommandForm(props: {
           <label className="block">
             <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">完整命令</span>
             <textarea
+              ref={autoResizeTextarea}
               value={values.command_text}
-              onChange={(e) => updateField('command_text', e.target.value)}
+              onChange={(e) => {
+                updateField('command_text', e.target.value);
+                autoResizeTextarea(e.target);
+              }}
               placeholder={`du -sh /var/log`}
-              rows={3}
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              rows={1}
+              className="mt-1 w-full resize-none overflow-hidden rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
               required
             />
           </label>
@@ -1712,13 +1739,17 @@ function CommandForm(props: {
             <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">参数说明(三级)</span>
             <span className="text-xs text-gray-400 ml-1">每行一个,格式:参数 | 全称 | 含义</span>
             <textarea
+              ref={autoResizeTextarea}
               value={values.parameters}
-              onChange={(e) => updateField('parameters', e.target.value)}
+              onChange={(e) => {
+                updateField('parameters', e.target.value);
+                autoResizeTextarea(e.target);
+              }}
               placeholder={`-s|--summarize|只显示每个目标的总大小,不展开子目录明细
 -h|--human-readable|人类可读格式(KB/MB/GB)
 -d 1|--max-depth=1|只显示一层子目录深度`}
-              rows={5}
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              rows={1}
+              className="mt-1 w-full resize-none overflow-hidden rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
           </label>
 
@@ -1736,11 +1767,15 @@ function CommandForm(props: {
       <label className="block">
         <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">详细介绍</span>
         <textarea
+          ref={autoResizeTextarea}
           value={values.introduction}
-          onChange={(e) => updateField('introduction', e.target.value)}
+          onChange={(e) => {
+            updateField('introduction', e.target.value);
+            autoResizeTextarea(e.target);
+          }}
           placeholder="命令的完整说明、使用场景、注意事项..."
-          rows={5}
-          className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          rows={1}
+          className="mt-1 w-full resize-none overflow-hidden rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
       </label>
 
@@ -1748,11 +1783,15 @@ function CommandForm(props: {
       <label className="block">
         <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">我的理解</span>
         <textarea
+          ref={autoResizeTextarea}
           value={values.notes}
-          onChange={(e) => updateField('notes', e.target.value)}
+          onChange={(e) => {
+            updateField('notes', e.target.value);
+            autoResizeTextarea(e.target);
+          }}
           placeholder="个人笔记:坑点、组合用法、示例..."
-          rows={4}
-          className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          rows={1}
+          className="mt-1 w-full resize-none overflow-hidden rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
       </label>
 

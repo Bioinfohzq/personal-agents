@@ -1,5 +1,5 @@
 // 模板类型
-export type TemplateType = 'article' | 'procedure';
+export type TemplateType = 'article' | 'procedure' | 'comparison';
 
 // 流程模板单步骤
 export interface ProcedureStep {
@@ -8,9 +8,33 @@ export interface ProcedureStep {
   note?: string;
 }
 
+// 对比模板表格数据
+export interface ComparisonTable {
+  headers: string[];
+  rows: string[][];
+  intro?: string;
+  supplement?: string;
+}
+
 // 模板类型中文标签
 export function getTemplateTypeLabel(type: TemplateType): string {
-  return type === 'procedure' ? '流程模板' : '文章模板';
+  if (type === 'procedure') return '流程模板';
+  if (type === 'comparison') return '对比模板';
+  return '文章模板';
+}
+
+// 创建空的对比表格(默认 3 列:维度 + 2 个对比项,3 行维度)
+export function createEmptyComparison(): ComparisonTable {
+  return {
+    headers: ['对比维度', 'A', 'B'],
+    rows: [
+      ['', '', ''],
+      ['', '', ''],
+      ['', '', ''],
+    ],
+    intro: '',
+    supplement: '',
+  };
 }
 
 // 系统文件层级专属字段
@@ -73,6 +97,7 @@ export interface KnowledgeDetail extends KnowledgeSummary {
   reference_url?: string;
   extra?: string;
   steps?: ProcedureStep[];
+  comparison?: ComparisonTable;
 }
 
 // 创建/更新知识的请求体
@@ -88,6 +113,7 @@ export interface KnowledgeInput {
   extra: string;
   template_type: TemplateType;
   steps: ProcedureStep[];
+  comparison?: ComparisonTable;
 }
 
 // 空表单初始值
@@ -103,6 +129,7 @@ export const emptyKnowledgeForm: KnowledgeInput = {
   extra: '',
   template_type: 'article',
   steps: [],
+  comparison: undefined,
 };
 
 // AI 解析请求
@@ -126,6 +153,7 @@ export interface ParseAIResponse {
   extra: string;
   template_type: TemplateType;
   steps: ProcedureStep[];
+  comparison?: ComparisonTable;
 }
 
 // 将 extra JSON 字符串解析为对象

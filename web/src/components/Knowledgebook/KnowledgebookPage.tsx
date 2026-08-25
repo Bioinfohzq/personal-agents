@@ -17,6 +17,13 @@ import {
   Wand2,
   X,
 } from 'lucide-react';
+
+/** 根据内容自动调整 textarea 高度 */
+function autoResizeTextarea(el: HTMLTextAreaElement | null) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 'px';
+}
 import { CommandbookPage } from '../Commandbook/CommandbookPage';
 import type { CommandbookPageRef } from '../Commandbook/CommandbookPage';
 import {
@@ -38,6 +45,7 @@ import {
 import { isUnauthorizedError } from '../../api/http';
 import {
   emptyKnowledgeForm,
+  createEmptyComparison,
   getRiskColor,
   getRiskLabel,
   getTemplateTypeLabel,
@@ -48,6 +56,7 @@ import {
 } from '../../types/knowledgebook';
 import type {
   AlgorithmExtra,
+  ComparisonTable,
   HardwareExtra,
   KnowledgeDetail,
   KnowledgeExtra,
@@ -318,6 +327,14 @@ export function KnowledgebookPage() {
       extra: selectedDetail.extra ?? '',
       template_type: selectedDetail.template_type,
       steps: selectedDetail.steps ?? [],
+      comparison: selectedDetail.comparison
+        ? {
+            headers: [...selectedDetail.comparison.headers],
+            rows: selectedDetail.comparison.rows.map((r) => [...r]),
+            intro: selectedDetail.comparison.intro,
+            supplement: selectedDetail.comparison.supplement,
+          }
+        : undefined,
     });
     setDrawerError(null);
     resetAIState();
@@ -368,6 +385,9 @@ export function KnowledgebookPage() {
         extra: result.extra || prev.extra,
         template_type: result.template_type || prev.template_type,
         steps: result.steps && result.steps.length > 0 ? result.steps : prev.steps,
+        comparison: result.comparison && result.comparison.headers.length > 0
+          ? result.comparison
+          : prev.comparison,
       }));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'AI 解析失败';
@@ -392,6 +412,18 @@ export function KnowledgebookPage() {
       setDrawerError('流程模板下,至少需要添加一个步骤');
       return;
     }
+    if (formValues.template_type === 'comparison') {
+      const cmp = formValues.comparison;
+      if (!cmp || cmp.headers.length < 2 || cmp.rows.length === 0) {
+        setDrawerError('对比模板下,至少需要 2 列和 1 行对比数据');
+        return;
+      }
+      const hasContent = cmp.rows.some((row) => row.some((cell) => cell.trim() !== ''));
+      if (!hasContent) {
+        setDrawerError('对比模板下,请至少填写一行对比内容');
+        return;
+      }
+    }
 
     setIsSubmitting(true);
     setDrawerError(null);
@@ -408,6 +440,7 @@ export function KnowledgebookPage() {
       extra: formValues.extra.trim(),
       template_type: formValues.template_type,
       steps: formValues.steps,
+      comparison: formValues.template_type === 'comparison' ? formValues.comparison : undefined,
     };
 
     try {
@@ -1065,6 +1098,8 @@ function KnowledgeItemCard(props: {
               className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
                 props.item.template_type === 'procedure'
                   ? 'bg-purple-50 text-purple-600'
+                  : props.item.template_type === 'comparison'
+                  ? 'bg-emerald-50 text-emerald-600'
                   : 'bg-blue-50 text-blue-600'
               }`}
             >
@@ -1180,6 +1215,8 @@ function KnowledgeDetailView(props: {
             className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
               detail.template_type === 'procedure'
                 ? 'bg-purple-50 text-purple-600'
+                : detail.template_type === 'comparison'
+                ? 'bg-emerald-50 text-emerald-600'
                 : 'bg-blue-50 text-blue-600'
             }`}
           >
@@ -1233,6 +1270,70 @@ function KnowledgeDetailView(props: {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* 对比模板 */}
+      {detail.template_type === 'comparison' && detail.comparison && detail.comparison.headers.length > 0 && (
+        <div className="space-y-3">
+          {/* 基础介绍 */}
+          {detail.comparison.intro && (
+            <div>
+              <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">基础介绍</div>
+              <div className="text-sm text-gray-700 bg-emerald-50/50 rounded-lg p-3 border border-emerald-100 whitespace-pre-wrap break-words">
+                {detail.comparison.intro}
+              </div>
+            </div>
+          )}
+
+          {/* 对比表格 */}
+          <div>
+            <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">对比表格</div>
+            <div className="overflow-x-auto rounded-lg border border-emerald-100">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-emerald-50">
+                    {detail.comparison.headers.map((h, i) => (
+                      <th
+                        key={i}
+                        className={`px-3 py-2 text-left text-xs font-semibold text-emerald-800 border-b border-emerald-100 ${
+                          i === 0 ? 'w-32' : ''
+                        }`}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {detail.comparison.rows.map((row, ri) => (
+                    <tr key={ri} className="hover:bg-gray-50">
+                      {row.map((cell, ci) => (
+                        <td
+                          key={ci}
+                          className={`px-3 py-2 text-sm whitespace-pre-wrap break-words ${
+                            ci === 0 ? 'font-medium text-gray-900 bg-gray-50/50' : 'text-gray-700'
+                          }`}
+                        >
+                          {cell}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* 补充说明 */}
+          {detail.comparison.supplement && (
+            <div>
+              <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">补充说明</div>
+              <div className="text-sm text-gray-700 bg-amber-50/50 rounded-lg p-3 border border-amber-100 whitespace-pre-wrap break-words">
+                {detail.comparison.supplement}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1562,11 +1663,15 @@ function KnowledgeForm(props: {
           AI 智能预填
         </div>
         <textarea
+          ref={autoResizeTextarea}
           value={aiRawText}
-          onChange={(e) => onAiRawTextChange(e.target.value)}
+          onChange={(e) => {
+            onAiRawTextChange(e.target.value);
+            autoResizeTextarea(e.target);
+          }}
           placeholder="把 AI 对知识点的解释全文粘贴到这里,点击解析后会自动预填下方字段..."
-          rows={4}
-          className="w-full rounded-lg border border-indigo-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 bg-white"
+          rows={1}
+          className="w-full resize-none overflow-hidden rounded-lg border border-indigo-200 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 bg-white"
         />
         {aiError && (
           <div className="text-xs text-red-600">{aiError}</div>
@@ -1587,11 +1692,19 @@ function KnowledgeForm(props: {
         <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">模板类型</span>
         <select
           value={values.template_type}
-          onChange={(e) => updateField('template_type', e.target.value as TemplateType)}
+          onChange={(e) => {
+            const t = e.target.value as TemplateType;
+            const patch: Partial<KnowledgeInput> = { template_type: t };
+            if (t === 'comparison' && !values.comparison) {
+              patch.comparison = createEmptyComparison();
+            }
+            onChange({ ...values, ...patch });
+          }}
           className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         >
           <option value="article">文章模板</option>
           <option value="procedure">流程模板</option>
+          <option value="comparison">对比模板</option>
         </select>
       </label>
 
@@ -1673,18 +1786,27 @@ function KnowledgeForm(props: {
           <label className="block">
             <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">详细介绍</span>
             <textarea
+              ref={autoResizeTextarea}
               value={values.content}
-              onChange={(e) => updateField('content', e.target.value)}
+              onChange={(e) => {
+                updateField('content', e.target.value);
+                autoResizeTextarea(e.target);
+              }}
               placeholder="知识点的完整说明、背景、注意事项..."
-              rows={5}
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              rows={1}
+              className="mt-1 w-full resize-none overflow-hidden rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
           </label>
         </>
-      ) : (
+      ) : values.template_type === 'procedure' ? (
         <ProcedureStepEditor
           value={values.steps}
           onChange={(v) => updateField('steps', v)}
+        />
+      ) : (
+        <ComparisonTableEditor
+          value={values.comparison ?? createEmptyComparison()}
+          onChange={(v) => updateField('comparison', v)}
         />
       )}
 
@@ -1692,11 +1814,15 @@ function KnowledgeForm(props: {
       <label className="block">
         <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">我的理解</span>
         <textarea
+          ref={autoResizeTextarea}
           value={values.notes}
-          onChange={(e) => updateField('notes', e.target.value)}
+          onChange={(e) => {
+            updateField('notes', e.target.value);
+            autoResizeTextarea(e.target);
+          }}
           placeholder="个人笔记:坑点、记忆要点、联想..."
-          rows={4}
-          className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          rows={1}
+          className="mt-1 w-full resize-none overflow-hidden rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
       </label>
 
@@ -1829,10 +1955,14 @@ function SystemPathExtraEditor(props: {
       <label className="block">
         <span className="text-xs text-gray-500">相关路径(每行一个)</span>
         <textarea
+          ref={autoResizeTextarea}
           value={(value.related_paths ?? []).join('\n')}
-          onChange={(e) => onChange({ ...value, related_paths: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })}
-          rows={3}
-          className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-mono focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          onChange={(e) => {
+            onChange({ ...value, related_paths: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) });
+            autoResizeTextarea(e.target);
+          }}
+          rows={1}
+          className="mt-1 w-full resize-none overflow-hidden rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-mono focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
       </label>
     </div>
@@ -1934,11 +2064,15 @@ function HardwareExtraEditor(props: {
       <label className="block">
         <span className="text-xs text-gray-500">关键规格(每行格式: 指标|数值)</span>
         <textarea
+          ref={autoResizeTextarea}
           value={(value.key_specs ?? []).join('\n')}
-          onChange={(e) => onChange({ ...value, key_specs: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) })}
+          onChange={(e) => {
+            onChange({ ...value, key_specs: e.target.value.split('\n').map((s) => s.trim()).filter(Boolean) });
+            autoResizeTextarea(e.target);
+          }}
           placeholder="核心数|12&#10;制程|3nm"
-          rows={3}
-          className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          rows={1}
+          className="mt-1 w-full resize-none overflow-hidden rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
       </label>
       <label className="block">
@@ -2024,10 +2158,14 @@ function AlgorithmExtraEditor(props: {
       <label className="block">
         <span className="text-xs text-gray-500">代码示例</span>
         <textarea
+          ref={autoResizeTextarea}
           value={value.code_example ?? ''}
-          onChange={(e) => onChange({ ...value, code_example: e.target.value })}
-          rows={6}
-          className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-mono focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          onChange={(e) => {
+            onChange({ ...value, code_example: e.target.value });
+            autoResizeTextarea(e.target);
+          }}
+          rows={1}
+          className="mt-1 w-full resize-none overflow-hidden rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-mono focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
       </label>
     </div>
@@ -2107,21 +2245,216 @@ function ProcedureStepEditor(props: {
             )}
           </div>
           <textarea
+            ref={autoResizeTextarea}
             value={step.code}
-            onChange={(e) => updateStep(index, { code: e.target.value })}
+            onChange={(e) => {
+              updateStep(index, { code: e.target.value });
+              autoResizeTextarea(e.target);
+            }}
             placeholder="该步骤的命令或代码(可选)"
-            rows={3}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            rows={1}
+            className="w-full resize-none overflow-hidden rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
           <textarea
+            ref={autoResizeTextarea}
             value={step.note}
-            onChange={(e) => updateStep(index, { note: e.target.value })}
+            onChange={(e) => {
+              updateStep(index, { note: e.target.value });
+              autoResizeTextarea(e.target);
+            }}
             placeholder="补充说明或注意事项(可选)"
-            rows={2}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            rows={1}
+            className="w-full resize-none overflow-hidden rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
         </div>
       ))}
+    </div>
+  );
+}
+
+/** 对比表格编辑器 */
+function ComparisonTableEditor(props: {
+  value: ComparisonTable;
+  onChange: (value: ComparisonTable) => void;
+}) {
+  const { value, onChange } = props;
+
+  function updateIntro(v: string) {
+    onChange({ ...value, intro: v });
+  }
+
+  function updateSupplement(v: string) {
+    onChange({ ...value, supplement: v });
+  }
+
+  function updateHeader(index: number, v: string) {
+    const headers = [...value.headers];
+    headers[index] = v;
+    onChange({ ...value, headers });
+  }
+
+  function updateCell(rowIndex: number, colIndex: number, v: string) {
+    const rows = value.rows.map((r) => [...r]);
+    rows[rowIndex][colIndex] = v;
+    onChange({ ...value, rows });
+  }
+
+  function addColumn() {
+    const colLabel = String.fromCharCode(65 + value.headers.length - 1); // A, B, C...
+    const headers = [...value.headers, colLabel];
+    const rows = value.rows.map((r) => [...r, '']);
+    onChange({ ...value, headers, rows });
+  }
+
+  function removeColumn(index: number) {
+    if (value.headers.length <= 2) return; // 至少保留 2 列(维度列 + 1 个对比列)
+    const headers = value.headers.filter((_, i) => i !== index);
+    const rows = value.rows.map((r) => r.filter((_, i) => i !== index));
+    onChange({ ...value, headers, rows });
+  }
+
+  function addRow() {
+    const row = value.headers.map(() => '');
+    onChange({ ...value, rows: [...value.rows, row] });
+  }
+
+  function removeRow(index: number) {
+    if (value.rows.length <= 1) return; // 至少保留 1 行
+    const rows = value.rows.filter((_, i) => i !== index);
+    onChange({ ...value, rows });
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* 基础介绍 */}
+      <label className="block">
+        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">基础介绍</span>
+        <textarea
+          ref={autoResizeTextarea}
+          value={value.intro ?? ''}
+          onChange={(e) => {
+            updateIntro(e.target.value);
+            autoResizeTextarea(e.target);
+          }}
+          placeholder="对比内容的背景说明、核心结论..."
+          rows={1}
+          className="mt-1 w-full resize-none overflow-hidden rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+        />
+      </label>
+
+      {/* 对比表格 */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">对比表格</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={addColumn}
+              className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-2 py-1 text-xs font-medium text-emerald-600 hover:bg-emerald-50"
+            >
+              <Plus size={12} />
+              添加列
+            </button>
+            <button
+              type="button"
+              onClick={addRow}
+              className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-2 py-1 text-xs font-medium text-emerald-600 hover:bg-emerald-50"
+            >
+              <Plus size={12} />
+              添加行
+            </button>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-emerald-50/60">
+                {value.headers.map((h, i) => (
+                  <th key={i} className="px-2 py-2 border-b border-emerald-100">
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="text"
+                        value={h}
+                        onChange={(e) => updateHeader(i, e.target.value)}
+                        placeholder={i === 0 ? '对比维度' : `对比项 ${i}`}
+                        className={`w-full rounded border border-transparent bg-transparent px-1.5 py-1 text-xs font-semibold text-emerald-800 focus:border-emerald-300 focus:bg-white focus:outline-none ${
+                          i === 0 ? 'w-28' : 'min-w-[100px]'
+                        }`}
+                      />
+                      {value.headers.length > 2 && i > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => removeColumn(i)}
+                          className="shrink-0 rounded p-0.5 text-gray-400 hover:bg-red-50 hover:text-red-500"
+                          title="删除此列"
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {value.rows.map((row, ri) => (
+                <tr key={ri}>
+                  {row.map((cell, ci) => (
+                    <td key={ci} className={`px-2 py-1.5 align-top ${ci === 0 ? 'bg-gray-50/40' : ''}`}>
+                      <div className="flex items-start gap-1">
+                        <textarea
+                        ref={autoResizeTextarea}
+                        value={cell}
+                        onChange={(e) => {
+                          updateCell(ri, ci, e.target.value);
+                          autoResizeTextarea(e.target);
+                        }}
+                        placeholder={ci === 0 ? '维度名称' : ''}
+                        rows={1}
+                        className={`w-full resize-none overflow-hidden rounded border border-transparent bg-transparent px-1.5 py-1 text-sm focus:border-emerald-300 focus:bg-white focus:outline-none ${
+                          ci === 0 ? 'font-medium text-gray-900 w-28' : 'text-gray-700 min-w-[100px]'
+                        }`}
+                      />
+                        {ci === 0 && value.rows.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => removeRow(ri)}
+                            className="shrink-0 mt-1 rounded p-0.5 text-gray-400 hover:bg-red-50 hover:text-red-500"
+                            title="删除此行"
+                          >
+                            <X size={12} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <p className="text-xs text-gray-400">
+          提示：第一列为对比维度，其余列为被对比的事物；可添加/删除行列以支持 2 列、3 列或更多对比。
+        </p>
+      </div>
+
+      {/* 补充说明 */}
+      <label className="block">
+        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">补充说明</span>
+        <textarea
+          ref={autoResizeTextarea}
+          value={value.supplement ?? ''}
+          onChange={(e) => {
+            updateSupplement(e.target.value);
+            autoResizeTextarea(e.target);
+          }}
+          placeholder="额外补充、选型建议、注意事项..."
+          rows={1}
+          className="mt-1 w-full resize-none overflow-hidden rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+        />
+      </label>
     </div>
   );
 }

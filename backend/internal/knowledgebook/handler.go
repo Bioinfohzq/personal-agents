@@ -29,7 +29,7 @@ func isValidCategory(category string) bool {
 
 // isValidTemplateType 校验模板类型
 func isValidTemplateType(templateType string) bool {
-	return templateType == "article" || templateType == "procedure"
+	return templateType == "article" || templateType == "procedure" || templateType == "comparison"
 }
 
 // ProcedureStep 流程模板单步骤
@@ -37,6 +37,18 @@ type ProcedureStep struct {
 	Title string `json:"title"`
 	Code  string `json:"code,omitempty"`
 	Note  string `json:"note,omitempty"`
+}
+
+// ComparisonTable 对比模板表格数据
+// Headers: 列标题数组(第一列通常是"对比维度/项目")
+// Rows: 行数据二维数组,每行长度应与 headers 长度一致
+// Intro: 基础介绍
+// Supplement: 补充说明
+type ComparisonTable struct {
+	Headers    []string   `json:"headers"`
+	Rows       [][]string `json:"rows"`
+	Intro      string     `json:"intro,omitempty"`
+	Supplement string     `json:"supplement,omitempty"`
 }
 
 // Handler 知识库 HTTP 处理器
@@ -48,17 +60,18 @@ type Handler struct {
 
 // KnowledgeRequest 创建/更新知识请求体
 type KnowledgeRequest struct {
-	Title        string          `json:"title"`
-	CategoryID   int64           `json:"category_id"`
-	SubCategory  string          `json:"sub_category"`
-	Tags         string          `json:"tags"`
-	Summary      string          `json:"summary"`
-	Content      string          `json:"content"`
-	Notes        string          `json:"notes"`
-	ReferenceURL string          `json:"reference_url"`
-	Extra        string          `json:"extra"`
-	TemplateType string          `json:"template_type"`
-	Steps        []ProcedureStep `json:"steps"`
+	Title        string           `json:"title"`
+	CategoryID   int64            `json:"category_id"`
+	SubCategory  string           `json:"sub_category"`
+	Tags         string           `json:"tags"`
+	Summary      string           `json:"summary"`
+	Content      string           `json:"content"`
+	Notes        string           `json:"notes"`
+	ReferenceURL string           `json:"reference_url"`
+	Extra        string           `json:"extra"`
+	TemplateType string           `json:"template_type"`
+	Steps        []ProcedureStep  `json:"steps"`
+	Comparison   *ComparisonTable `json:"comparison"`
 }
 
 // MoveKnowledgeRequest 移动分类请求体（只接收 category_id）
@@ -84,11 +97,12 @@ type KnowledgeSummary struct {
 // KnowledgeDetail 知识详情
 type KnowledgeDetail struct {
 	KnowledgeSummary
-	Content      string          `json:"content,omitempty"`
-	Notes        string          `json:"notes,omitempty"`
-	ReferenceURL string          `json:"reference_url,omitempty"`
-	Extra        string          `json:"extra,omitempty"`
-	Steps        []ProcedureStep `json:"steps,omitempty"`
+	Content      string           `json:"content,omitempty"`
+	Notes        string           `json:"notes,omitempty"`
+	ReferenceURL string           `json:"reference_url,omitempty"`
+	Extra        string           `json:"extra,omitempty"`
+	Steps        []ProcedureStep  `json:"steps,omitempty"`
+	Comparison   *ComparisonTable `json:"comparison,omitempty"`
 }
 
 // knowledgeRecord 数据库行映射结构体
@@ -107,6 +121,7 @@ type knowledgeRecord struct {
 	Extra        sql.NullString
 	TemplateType string
 	Steps        sql.NullString
+	Comparison   sql.NullString
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -206,6 +221,9 @@ func (handler *Handler) CreateKnowledgeItem(c echo.Context) error {
 	if request.TemplateType == "procedure" && len(request.Steps) == 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "steps are required for procedure template")
 	}
+	if request.TemplateType == "comparison" && (request.Comparison == nil || len(request.Comparison.Headers) < 2 || len(request.Comparison.Rows) == 0) {
+		return echo.NewHTTPError(http.StatusBadRequest, "comparison requires at least 2 columns and 1 row")
+	}
 
 	if err := handler.validateCategoryID(c.Request().Context(), userID, request.CategoryID); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid category_id")
@@ -220,10 +238,15 @@ func (handler *Handler) CreateKnowledgeItem(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid steps")
 	}
 
+	comparisonJSON, err := marshalComparison(request.Comparison)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid comparison")
+	}
+
 	result, err := handler.store.DB().ExecContext(
 		c.Request().Context(),
-		`INSERT INTO knowledge_items (user_id, title, category_id, sub_category, tags, summary, content, notes, reference_url, extra, template_type, steps)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO knowledge_items (user_id, title, category_id, sub_category, tags, summary, content, notes, reference_url, extra, template_type, steps, comparison)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		userID,
 		request.Title,
 		request.CategoryID,
@@ -236,6 +259,7 @@ func (handler *Handler) CreateKnowledgeItem(c echo.Context) error {
 		nullableJSON(request.Extra),
 		request.TemplateType,
 		nullableString(string(stepsJSON)),
+		nullableString(comparisonJSON),
 	)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create knowledge item")
@@ -318,10 +342,15 @@ func (handler *Handler) UpdateKnowledgeItem(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid steps")
 	}
 
+	comparisonJSON, err := marshalComparison(request.Comparison)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid comparison")
+	}
+
 	result, err := handler.store.DB().ExecContext(
 		c.Request().Context(),
 		`UPDATE knowledge_items
-		 SET title = ?, category_id = ?, sub_category = ?, tags = ?, summary = ?, content = ?, notes = ?, reference_url = ?, extra = ?, template_type = ?, steps = ?
+		 SET title = ?, category_id = ?, sub_category = ?, tags = ?, summary = ?, content = ?, notes = ?, reference_url = ?, extra = ?, template_type = ?, steps = ?, comparison = ?
 		 WHERE id = ? AND user_id = ?`,
 		request.Title,
 		request.CategoryID,
@@ -334,6 +363,7 @@ func (handler *Handler) UpdateKnowledgeItem(c echo.Context) error {
 		nullableJSON(request.Extra),
 		request.TemplateType,
 		nullableString(string(stepsJSON)),
+		nullableString(comparisonJSON),
 		itemID,
 		userID,
 	)
@@ -453,7 +483,7 @@ func (handler *Handler) findKnowledgeDetail(ctx context.Context, userID int64, i
 	var record knowledgeRecord
 	row := handler.store.DB().QueryRowContext(
 		ctx,
-		`SELECT ki.id, ki.title, ki.category_id, c.name, c.slug, ki.sub_category, ki.tags, ki.summary, ki.content, ki.notes, ki.reference_url, ki.extra, ki.template_type, ki.steps, ki.created_at, ki.updated_at
+		`SELECT ki.id, ki.title, ki.category_id, c.name, c.slug, ki.sub_category, ki.tags, ki.summary, ki.content, ki.notes, ki.reference_url, ki.extra, ki.template_type, ki.steps, ki.comparison, ki.created_at, ki.updated_at
 		 FROM knowledge_items ki
 		 JOIN categories c ON c.id = ki.category_id
 		 WHERE ki.id = ? AND ki.user_id = ?
@@ -462,7 +492,7 @@ func (handler *Handler) findKnowledgeDetail(ctx context.Context, userID int64, i
 		userID,
 	)
 
-	if err := row.Scan(&record.ID, &record.Title, &record.CategoryID, &record.CategoryName, &record.CategorySlug, &record.SubCategory, &record.Tags, &record.Summary, &record.Content, &record.Notes, &record.ReferenceURL, &record.Extra, &record.TemplateType, &record.Steps, &record.CreatedAt, &record.UpdatedAt); err != nil {
+	if err := row.Scan(&record.ID, &record.Title, &record.CategoryID, &record.CategoryName, &record.CategorySlug, &record.SubCategory, &record.Tags, &record.Summary, &record.Content, &record.Notes, &record.ReferenceURL, &record.Extra, &record.TemplateType, &record.Steps, &record.Comparison, &record.CreatedAt, &record.UpdatedAt); err != nil {
 		return KnowledgeDetail{}, err
 	}
 
@@ -497,6 +527,18 @@ func (request *KnowledgeRequest) normalize() {
 		request.Steps[i].Code = strings.TrimSpace(request.Steps[i].Code)
 		request.Steps[i].Note = strings.TrimSpace(request.Steps[i].Note)
 	}
+	if request.Comparison != nil {
+		for i := range request.Comparison.Headers {
+			request.Comparison.Headers[i] = strings.TrimSpace(request.Comparison.Headers[i])
+		}
+		for i := range request.Comparison.Rows {
+			for j := range request.Comparison.Rows[i] {
+				request.Comparison.Rows[i][j] = strings.TrimSpace(request.Comparison.Rows[i][j])
+			}
+		}
+		request.Comparison.Intro = strings.TrimSpace(request.Comparison.Intro)
+		request.Comparison.Supplement = strings.TrimSpace(request.Comparison.Supplement)
+	}
 }
 
 // validateExtra 校验 extra 字段必须是合法 JSON 或空字符串
@@ -521,6 +563,33 @@ func parseSteps(stepsJSON sql.NullString) []ProcedureStep {
 		return nil
 	}
 	return steps
+}
+
+// parseComparison 将 JSON 字符串解析为对比表格
+func parseComparison(comparisonJSON sql.NullString) *ComparisonTable {
+	if !comparisonJSON.Valid || comparisonJSON.String == "" {
+		return nil
+	}
+	var table ComparisonTable
+	if err := json.Unmarshal([]byte(comparisonJSON.String), &table); err != nil {
+		return nil
+	}
+	if len(table.Headers) == 0 || len(table.Rows) == 0 {
+		return nil
+	}
+	return &table
+}
+
+// marshalComparison 将对比表格序列化为 JSON 字符串
+func marshalComparison(table *ComparisonTable) (string, error) {
+	if table == nil || len(table.Headers) == 0 {
+		return "", nil
+	}
+	data, err := json.Marshal(table)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 // summary 将数据库记录转换为列表摘要
@@ -549,6 +618,7 @@ func (record knowledgeRecord) detail() KnowledgeDetail {
 		ReferenceURL:     nullStringValue(record.ReferenceURL),
 		Extra:            nullStringValue(record.Extra),
 		Steps:            parseSteps(record.Steps),
+		Comparison:       parseComparison(record.Comparison),
 	}
 }
 
