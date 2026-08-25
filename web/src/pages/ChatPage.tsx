@@ -299,75 +299,62 @@ export function ChatPage() {
       const toolName = role === 'tool' ? getToolName(lgMsg) : undefined;
 
       // 对 ToolMessage 的处理:complete 才到达(工具结果),作为独立消息插入
+      // 注意:对 streamedMsgIds/currentStreamLocalId 的写入必须在 setMessages 之外完成。
+      // React StrictMode(dev)会 double-invoke updater,在 updater 内写这些闭包变量会让
+      // 两次调用走不同分支,新气泡被静默丢弃(表现为流式过程不实时显示)。
       if (role === 'tool') {
+        const boundLocalId = lgId ? streamedMsgIds.get(lgId) : undefined;
+        const localId = boundLocalId ?? (lgId || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+        if (lgId && !boundLocalId) streamedMsgIds.set(lgId, localId);
+        // tool 消息结束后,下一个 AI partial 应该创建新气泡
+        currentStreamLocalId = null;
+
         setMessages(prev => {
-          let next = [...prev];
-          // tool 消息通常有 id,检查是否已存在
-          if (lgId && streamedMsgIds.has(lgId)) {
-            const localId = streamedMsgIds.get(lgId)!;
-            next = next.map(m => m.id === localId ? { ...m, content, toolName, isStreaming: false } : m);
-          } else {
-            // 插入 tool 消息前,确保思考占位被移除(若还在)
-            next = next.filter(m => m.id !== placeholderId);
-            const localId = lgId || `tool-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-            if (lgId) streamedMsgIds.set(lgId, localId);
-            next.push({ id: localId, role: 'tool', content: content || '(工具无输出)', toolName, isStreaming: false });
+          if (boundLocalId) {
+            return prev.map(m => m.id === boundLocalId ? { ...m, content, toolName, isStreaming: false } : m);
           }
-          // tool 消息结束后,下一个 AI partial 应该创建新气泡
-          currentStreamLocalId = null;
+          // 插入 tool 消息前,确保思考占位被移除(若还在)
+          const next = prev.filter(m => m.id !== placeholderId);
+          next.push({ id: localId, role: 'tool', content: content || '(工具无输出)', toolName, isStreaming: false });
           return next;
         });
         return;
       }
 
-      // AI 消息(agent)
-      setMessages(prev => {
-        let next = [...prev];
+      // AI 消息(agent):绑定决策在 updater 外完成(同上,updater 必须保持纯函数)
+      const boundLocalId = lgId ? streamedMsgIds.get(lgId) : undefined;
+      let targetLocalId: string;
+      let createNew = false;
 
+      if (boundLocalId) {
         // 情况1:该 lgId 已绑定到某个本地气泡 → 更新它
-        if (lgId && streamedMsgIds.has(lgId)) {
-          const localId = streamedMsgIds.get(lgId)!;
-          next = next.map(m => m.id === localId ? { ...m, content, toolName, isStreaming: !isComplete } : m);
-          if (isComplete) {
-            currentStreamLocalId = null;
-          } else {
-            currentStreamLocalId = localId;
-          }
-          return next;
-        }
+        targetLocalId = boundLocalId;
+      } else if (currentStreamLocalId) {
+        // 情况2:有当前流目标(思考占位或已创建的气泡) → 更新并绑定
+        // 内容为空且没有 lgId(还在初始化阶段) → 保留思考状态不动
+        if (!content.trim() && !lgId && !isComplete) return;
+        targetLocalId = currentStreamLocalId;
+        if (lgId) streamedMsgIds.set(lgId, targetLocalId);
+      } else {
+        // 情况3:没有当前流目标且是新消息 → 创建新气泡(tool 之后的新 AI 消息)
+        if (!content.trim() && !isComplete) return;
+        createNew = true;
+        targetLocalId = lgId || `stream-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        if (lgId) streamedMsgIds.set(lgId, targetLocalId);
+      }
 
-        // 情况2:有 currentStreamLocalId(指向思考占位或已创建的气泡)
-        //   → 更新该气泡,如果有 lgId 则绑定
-        if (currentStreamLocalId) {
-          // 如果内容为空且没有 lgId(还在初始化阶段),保留思考状态不动
-          if (!content.trim() && !lgId && !isComplete) {
-            return next;
-          }
-          next = next.map(m =>
-            m.id === currentStreamLocalId
-              ? { ...m, content, toolName: toolName || m.toolName, isStreaming: !isComplete }
-              : m
-          );
-          if (lgId) streamedMsgIds.set(lgId, currentStreamLocalId);
-          if (isComplete) {
-            currentStreamLocalId = null;
-          }
-          return next;
-        }
+      currentStreamLocalId = isComplete ? null : targetLocalId;
 
-        // 情况3:没有当前流目标且是新消息 → 创建新气泡
-        // （tool 消息之后可能出现的新 AI 消息会走到这里）
-        const hasContent = content.trim().length > 0;
-        if (!hasContent && !isComplete) {
-          return next;
+      setMessages(prev => {
+        if (createNew || !prev.some(m => m.id === targetLocalId)) {
+          // 新气泡;目标气泡不在列表时也走新建,避免静默丢弃
+          return [...prev, { id: targetLocalId, role: 'agent', content, toolName, isStreaming: !isComplete }];
         }
-        const localId = lgId || `stream-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        if (lgId) streamedMsgIds.set(lgId, localId);
-        next.push({ id: localId, role: 'agent', content, toolName, isStreaming: !isComplete });
-        if (!isComplete) {
-          currentStreamLocalId = localId;
-        }
-        return next;
+        return prev.map(m =>
+          m.id === targetLocalId
+            ? { ...m, content, toolName: toolName || m.toolName, isStreaming: !isComplete }
+            : m
+        );
       });
     };
 
