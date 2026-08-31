@@ -8,15 +8,18 @@ import {
   ChevronRight,
   Copy,
   ExternalLink,
+  FileText,
   Loader2,
   Pencil,
   Plus,
   Search,
   Terminal,
   Trash2,
+  Upload,
   Wand2,
   X,
 } from 'lucide-react';
+import Markdown from 'react-markdown';
 
 /** 根据内容自动调整 textarea 高度 */
 function autoResizeTextarea(el: HTMLTextAreaElement | null) {
@@ -406,6 +409,10 @@ export function KnowledgebookPage() {
     }
     if (formValues.template_type === 'article' && !formValues.content.trim()) {
       setDrawerError('文章模板下,详细介绍是必填项');
+      return;
+    }
+    if (formValues.template_type === 'document' && !formValues.content.trim()) {
+      setDrawerError('文档模板下,请上传 Markdown 文件或填写内容');
       return;
     }
     if (formValues.template_type === 'procedure' && formValues.steps.length === 0) {
@@ -1100,6 +1107,8 @@ function KnowledgeItemCard(props: {
                   ? 'bg-purple-50 text-purple-600'
                   : props.item.template_type === 'comparison'
                   ? 'bg-emerald-50 text-emerald-600'
+                  : props.item.template_type === 'document'
+                  ? 'bg-amber-50 text-amber-600'
                   : 'bg-blue-50 text-blue-600'
               }`}
             >
@@ -1343,7 +1352,15 @@ function KnowledgeDetailView(props: {
       {detail.category === 'hardware' && <HardwareDetailView extra={extra as HardwareExtra} />}
       {detail.category === 'algorithm' && <AlgorithmDetailView extra={extra as AlgorithmExtra} onCopy={onCopy} copyFeedback={copyFeedback} />}
 
-      {detail.content && (
+      {/* 文档模板:Markdown 渲染 + 预览/源码切换;其他模板保持纯文本 */}
+      {detail.template_type === 'document' ? (
+        detail.content && (
+          <DocumentContentView
+            content={detail.content}
+            filename={parseExtra<DocumentExtra>(detail.extra).filename}
+          />
+        )
+      ) : detail.content && (
         <div>
           <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">详细介绍</div>
           <div className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3 whitespace-pre-wrap break-words">
@@ -1610,6 +1627,236 @@ function CopyButton(props: {
   );
 }
 
+/** Markdown 渲染预览:react-markdown + Tailwind 手写排版样式 */
+function MarkdownPreview(props: { content: string }) {
+  return (
+    <div className="text-sm leading-relaxed text-gray-700">
+      <Markdown
+        components={{
+          h1: ({ children }) => <h1 className="mt-5 mb-2 text-xl font-bold text-gray-900 first:mt-0">{children}</h1>,
+          h2: ({ children }) => <h2 className="mt-4 mb-2 text-lg font-bold text-gray-900 first:mt-0">{children}</h2>,
+          h3: ({ children }) => <h3 className="mt-3 mb-1.5 text-base font-semibold text-gray-900 first:mt-0">{children}</h3>,
+          h4: ({ children }) => <h4 className="mt-3 mb-1 text-sm font-semibold text-gray-900 first:mt-0">{children}</h4>,
+          p: ({ children }) => <p className="my-2 whitespace-pre-wrap break-words">{children}</p>,
+          ul: ({ children }) => <ul className="my-2 list-disc pl-5 space-y-1">{children}</ul>,
+          ol: ({ children }) => <ol className="my-2 list-decimal pl-5 space-y-1">{children}</ol>,
+          li: ({ children }) => <li className="break-words">{children}</li>,
+          strong: ({ children }) => <strong className="font-semibold text-gray-900">{children}</strong>,
+          em: ({ children }) => <em className="italic">{children}</em>,
+          blockquote: ({ children }) => (
+            <blockquote className="my-2 border-l-4 border-amber-300 bg-amber-50/60 px-3 py-2 text-gray-700">{children}</blockquote>
+          ),
+          hr: () => <hr className="my-4 border-gray-200" />,
+          a: ({ href, children }) => (
+            <a href={href} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline break-all">
+              {children}
+            </a>
+          ),
+          img: ({ src, alt }) => (
+            <img src={src} alt={alt ?? ''} className="my-2 max-w-full rounded-lg border border-gray-200" />
+          ),
+          pre: ({ children }) => (
+            <pre className="my-2 overflow-x-auto rounded-lg bg-gray-900 p-3 text-xs leading-relaxed text-gray-50">
+              {children}
+            </pre>
+          ),
+          code: ({ className, children }) =>
+            // 带 language- 前缀的是代码块(样式在 pre 上),否则按行内代码处理
+            /language-/.test(className ?? '') ? (
+              <code className={`${className ?? ''} font-mono`}>{children}</code>
+            ) : (
+              <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-xs text-pink-600 break-all">
+                {children}
+              </code>
+            ),
+          table: ({ children }) => (
+            <div className="my-2 overflow-x-auto rounded-lg border border-gray-200">
+              <table className="w-full text-sm">{children}</table>
+            </div>
+          ),
+          thead: ({ children }) => <thead className="bg-gray-50">{children}</thead>,
+          th: ({ children }) => (
+            <th className="border-b border-gray-200 px-3 py-2 text-left text-xs font-semibold text-gray-800">{children}</th>
+          ),
+          td: ({ children }) => <td className="border-b border-gray-100 px-3 py-2 align-top break-words">{children}</td>,
+        }}
+      >
+        {props.content}
+      </Markdown>
+    </div>
+  );
+}
+
+/** 文档内容查看:预览(Markdown 渲染)/源码切换 */
+function DocumentContentView(props: { content: string; filename?: string }) {
+  const { content, filename } = props;
+  const [mode, setMode] = useState<'preview' | 'source'>('preview');
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-1.5 text-xs font-medium text-gray-500 uppercase tracking-wide">
+          <FileText size={14} />
+          文档内容
+        </div>
+        {/* 预览/源码切换 */}
+        <div className="flex items-center rounded-lg bg-gray-100 p-0.5">
+          <button
+            type="button"
+            onClick={() => setMode('preview')}
+            className={`rounded-md px-2 py-0.5 text-xs font-medium transition-colors ${
+              mode === 'preview' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-800'
+            }`}
+          >
+            预览
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('source')}
+            className={`rounded-md px-2 py-0.5 text-xs font-medium transition-colors ${
+              mode === 'source' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-800'
+            }`}
+          >
+            源码
+          </button>
+        </div>
+      </div>
+      {filename && (
+        <div className="mb-2 inline-flex items-center gap-1.5 rounded-lg border border-amber-100 bg-amber-50 px-2.5 py-1 text-xs text-amber-700">
+          <FileText size={12} />
+          {filename}
+        </div>
+      )}
+      {mode === 'preview' ? (
+        <div className="rounded-lg border border-gray-200 bg-white p-4">
+          <MarkdownPreview content={content} />
+        </div>
+      ) : (
+        <pre className="rounded-lg bg-gray-50 p-3 font-mono text-xs text-gray-800 whitespace-pre-wrap break-words">
+          {content}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+/** 文档模板编辑器:上传 .md 文件回填正文,支持源码编辑与预览切换 */
+function DocumentContentEditor(props: {
+  value: string;
+  extra: string;
+  onChange: (content: string) => void;
+  onExtraChange: (patch: KnowledgeExtra) => void;
+}) {
+  const { value, extra, onChange, onExtraChange } = props;
+  const [mode, setMode] = useState<'edit' | 'preview'>('edit');
+  const [isReading, setIsReading] = useState(false);
+  const [readError, setReadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const filename = parseExtra<DocumentExtra>(extra).filename;
+
+  // 读取本地 Markdown 文件,回填正文与文件名
+  async function handleFile(file: File) {
+    setIsReading(true);
+    setReadError(null);
+    try {
+      const text = await file.text();
+      onChange(text);
+      onExtraChange({ filename: file.name });
+    } catch {
+      setReadError('文件读取失败');
+    } finally {
+      setIsReading(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5 text-xs font-medium text-gray-500 uppercase tracking-wide">
+          <FileText size={14} />
+          文档内容
+        </div>
+        <div className="flex items-center gap-2">
+          {/* 编辑/预览切换 */}
+          <div className="flex items-center rounded-lg bg-gray-100 p-0.5">
+            <button
+              type="button"
+              onClick={() => setMode('edit')}
+              className={`rounded-md px-2 py-0.5 text-xs font-medium transition-colors ${
+                mode === 'edit' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              编辑
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('preview')}
+              className={`rounded-md px-2 py-0.5 text-xs font-medium transition-colors ${
+                mode === 'preview' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-800'
+              }`}
+            >
+              预览
+            </button>
+          </div>
+          {/* 上传按钮 */}
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isReading}
+            className="inline-flex items-center gap-1 rounded-lg border border-amber-200 px-2.5 py-1 text-xs font-medium text-amber-600 hover:bg-amber-50 disabled:opacity-50"
+          >
+            {isReading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+            上传文件
+          </button>
+          {/* 隐藏的文件选择框,只接受 Markdown/txt */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".md,.markdown,.txt"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void handleFile(file);
+              // 清空 value 以便重复选择同一文件时仍触发 onChange
+              e.target.value = '';
+            }}
+          />
+        </div>
+      </div>
+
+      {filename && (
+        <div className="inline-flex items-center gap-1.5 rounded-lg border border-amber-100 bg-amber-50 px-2.5 py-1 text-xs text-amber-700">
+          <FileText size={12} />
+          {filename}
+        </div>
+      )}
+      {readError && <div className="text-xs text-red-600">{readError}</div>}
+
+      {mode === 'edit' ? (
+        <textarea
+          ref={autoResizeTextarea}
+          value={value}
+          onChange={(e) => {
+            onChange(e.target.value);
+            autoResizeTextarea(e.target);
+          }}
+          placeholder="点击「上传文件」导入 .md 文件,或直接在此粘贴/编写 Markdown..."
+          rows={6}
+          className="w-full resize-y min-h-[160px] rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+        />
+      ) : value ? (
+        <div className="rounded-lg border border-gray-200 bg-white p-4 min-h-[160px]">
+          <MarkdownPreview content={value} />
+        </div>
+      ) : (
+        <div className="rounded-lg border border-dashed border-gray-300 p-6 text-center text-sm text-gray-400">
+          暂无内容,请上传文件或切换到编辑模式
+        </div>
+      )}
+    </div>
+  );
+}
+
 function KnowledgeForm(props: {
   values: KnowledgeInput;
   onChange: (values: KnowledgeInput) => void;
@@ -1656,7 +1903,8 @@ function KnowledgeForm(props: {
 
   return (
     <form onSubmit={onSubmit} className="px-5 py-4 pb-20 space-y-4">
-      {/* AI 智能预填 */}
+      {/* AI 智能预填(文档模板不适用,隐藏) */}
+      {values.template_type !== 'document' && (
       <div className="rounded-lg border border-indigo-100 bg-indigo-50/50 p-3 space-y-2">
         <div className="flex items-center gap-1.5 text-sm font-medium text-indigo-700">
           <Wand2 size={16} />
@@ -1686,6 +1934,7 @@ function KnowledgeForm(props: {
           {isParsing ? '解析中...' : '一键解析'}
         </button>
       </div>
+      )}
 
       {/* 模板类型 */}
       <label className="block">
@@ -1705,6 +1954,7 @@ function KnowledgeForm(props: {
           <option value="article">文章模板</option>
           <option value="procedure">流程模板</option>
           <option value="comparison">对比模板</option>
+          <option value="document">文档模板</option>
         </select>
       </label>
 
@@ -1802,6 +2052,13 @@ function KnowledgeForm(props: {
         <ProcedureStepEditor
           value={values.steps}
           onChange={(v) => updateField('steps', v)}
+        />
+      ) : values.template_type === 'document' ? (
+        <DocumentContentEditor
+          value={values.content}
+          extra={values.extra}
+          onChange={(v) => updateField('content', v)}
+          onExtraChange={updateExtra}
         />
       ) : (
         <ComparisonTableEditor

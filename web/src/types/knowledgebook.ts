@@ -1,5 +1,5 @@
-// 模板类型
-export type TemplateType = 'article' | 'procedure' | 'comparison';
+// 模板类型(document: Markdown 文档,全文存 content,文件名存 extra.filename)
+export type TemplateType = 'article' | 'procedure' | 'comparison' | 'document';
 
 // 流程模板单步骤
 export interface ProcedureStep {
@@ -20,6 +20,7 @@ export interface ComparisonTable {
 export function getTemplateTypeLabel(type: TemplateType): string {
   if (type === 'procedure') return '流程模板';
   if (type === 'comparison') return '对比模板';
+  if (type === 'document') return '文档模板';
   return '文章模板';
 }
 
@@ -73,7 +74,12 @@ export interface AlgorithmExtra {
   space_complexity?: string;
 }
 
-export type KnowledgeExtra = SystemPathExtra | UrlResourceExtra | HardwareExtra | AlgorithmExtra | Record<string, unknown>;
+// 文档模板专属字段(Markdown 上传文件的元信息)
+export interface DocumentExtra {
+  filename?: string;
+}
+
+export type KnowledgeExtra = SystemPathExtra | UrlResourceExtra | HardwareExtra | AlgorithmExtra | DocumentExtra | Record<string, unknown>;
 
 // 知识摘要(列表用)
 export interface KnowledgeSummary {

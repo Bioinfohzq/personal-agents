@@ -27,9 +27,9 @@ func isValidCategory(category string) bool {
 	return !strings.ContainsAny(category, " \t\r\n")
 }
 
-// isValidTemplateType 校验模板类型
+// isValidTemplateType 校验模板类型(document 为 Markdown 文档模板)
 func isValidTemplateType(templateType string) bool {
-	return templateType == "article" || templateType == "procedure" || templateType == "comparison"
+	return templateType == "article" || templateType == "procedure" || templateType == "comparison" || templateType == "document"
 }
 
 // ProcedureStep 流程模板单步骤
@@ -217,6 +217,10 @@ func (handler *Handler) CreateKnowledgeItem(c echo.Context) error {
 	}
 	if request.TemplateType == "article" && request.Content == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "content is required for article template")
+	}
+	// 文档模板:Markdown 全文存 content,必填
+	if request.TemplateType == "document" && request.Content == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "content is required for document template")
 	}
 	if request.TemplateType == "procedure" && len(request.Steps) == 0 {
 		return echo.NewHTTPError(http.StatusBadRequest, "steps are required for procedure template")
