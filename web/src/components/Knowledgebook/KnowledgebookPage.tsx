@@ -60,6 +60,7 @@ import {
 import type {
   AlgorithmExtra,
   ComparisonTable,
+  DocumentExtra,
   HardwareExtra,
   KnowledgeDetail,
   KnowledgeExtra,
@@ -1808,11 +1809,10 @@ function DocumentContentEditor(props: {
             {isReading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
             上传文件
           </button>
-          {/* 隐藏的文件选择框,只接受 Markdown/txt */}
+          {/* 隐藏的文件选择框(不限制后缀:macOS 下 accept=".md" 过滤会导致 .md 文件在对话框中不可见) */}
           <input
             ref={fileInputRef}
             type="file"
-            accept=".md,.markdown,.txt"
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
@@ -1859,7 +1859,7 @@ function DocumentContentEditor(props: {
 
 function KnowledgeForm(props: {
   values: KnowledgeInput;
-  onChange: (values: KnowledgeInput) => void;
+  onChange: (updater: KnowledgeInput | ((prev: KnowledgeInput) => KnowledgeInput)) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onCancel: () => void;
   isSubmitting: boolean;
@@ -1891,14 +1891,17 @@ function KnowledgeForm(props: {
     [categories, values.category_id],
   );
 
+  // 函数式更新:避免同一事件内多次调用时用旧闭包 values 互相覆盖字段
   function updateField<K extends keyof KnowledgeInput>(key: K, value: KnowledgeInput[K]) {
-    onChange({ ...values, [key]: value });
+    onChange((prev: KnowledgeInput) => ({ ...prev, [key]: value }));
   }
 
   function updateExtra(patch: KnowledgeExtra) {
-    const current = parseExtra(values.extra);
-    const next = { ...current, ...patch };
-    updateField('extra', stringifyExtra(next));
+    onChange((prev: KnowledgeInput) => {
+      const current = parseExtra(prev.extra);
+      const next = { ...current, ...patch };
+      return { ...prev, extra: stringifyExtra(next) };
+    });
   }
 
   return (

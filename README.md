@@ -1,19 +1,26 @@
-# Personal Agents (AI 助理全栈项目)
+# Personal Agents — 个人 AI 中台
 
-这是一个全栈式的个人智能体（AI Assistant）项目。
-- **智能体核心**：基于 LangChain `create_agent` 和 LangGraph 构建的 Agent 服务，使用 `uv` 管理 Python 依赖。
-- **业务后端**：基于 Go 构建的后端服务，用于承载用户、登录、权限、业务配置和数据库访问。
-- **Web 前端**：基于 React + Vite + Tailwind CSS v4 构建的现代化 Web 交互界面，使用官方 `@langchain/langgraph-sdk` 直连后端，支持打字机流式输出。
+一个面向个人的全栈 AI 中台系统:不仅仅是聊天机器人,更是**你的知识中枢、长期记忆、命令手册和工作助手的统一入口**。所有你手动记录的知识、和 AI 对话中有价值的输出,最终都沉淀在一个可全局检索、可被 AI 推理时引用的个人知识库里。
+
+- **智能体核心**:基于 LangChain `create_agent` 和 LangGraph 构建的 Agent 服务,使用 `uv` 管理 Python 依赖。
+- **业务后端**:基于 Go 构建的后端服务,承载用户认证、知识中枢、命令手册、分类管理和数据库访问。
+- **Web 前端**:基于 React + Vite + Tailwind CSS v4 构建的现代化 Web 界面,使用官方 `@langchain/langgraph-sdk` 直连后端,支持打字机流式输出。
+- **桌面客户端**:基于 Tauri 2 的桌面应用,为未来本地 embedding / 本地文件深度集成做准备。
+
+> **产品蓝图与能力缺口清单**:见 [VISION.md](./VISION.md),每次新会话必读,每次能力实现后同步更新。
+> **协作规则与代码约定**:见 [AGENTS.md](./AGENTS.md),IDE/Agent 自动加载。
 
 ## 项目结构
 
-- `/agent`: 核心智能体图结构逻辑（LangGraph）。
-- `/backend`: Go 业务后端，负责用户、登录、权限、配置和数据库访问。
-- `/web`: React 前端交互项目界面。
-- `/desktop`: 基于 React + TypeScript + Tauri 2 的桌面客户端，默认连接本机 LangGraph API。
+- `/agent`: 核心智能体图结构逻辑(LangGraph)。
+- `/backend`: Go 业务后端,负责用户、认证、知识中枢、命令手册、分类、配置和数据库访问。
+- `/web`: React 前端交互界面,包含对话、知识中枢、命令手册、密码本、文件系统、日程等模块。
+- `/desktop`: 基于 React + TypeScript + Tauri 2 的桌面客户端,默认连接本机 LangGraph API。
 - `langgraph.json`: LangGraph 服务的配置文件。
 - `Makefile` & `start_services.sh`: macOS/Linux 下的项目脚手架与一键启停管理脚本。
-- `.vscode/launch.json`: VS Code 调试配置，包含 Windows 下启动 LangGraph 后端的配置。
+- `AGENTS.md`: Agent 协作规则与代码约定(IDE 自动加载)。
+- `VISION.md`: 产品蓝图、能力缺口清单与实现路线(新功能开发前必读)。
+- `.vscode/launch.json`: VS Code 调试配置,包含 Windows 下启动 LangGraph 后端的配置。
 
 ## 快速开始
 
