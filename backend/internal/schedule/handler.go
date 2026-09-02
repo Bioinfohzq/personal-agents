@@ -106,7 +106,7 @@ func (handler *Handler) ListSchedules(c echo.Context) error {
 		// endTime 设为当天 23:59:59,包含整天
 		endTime = endTime.Add(24*time.Hour - time.Second)
 
-		rows, err = handler.store.DB().QueryContext(
+		rows, err = handler.store.QueryContext(
 			c.Request().Context(),
 			`SELECT id, title, start_time, end_time, location, created_at, updated_at
 			 FROM schedules
@@ -116,7 +116,7 @@ func (handler *Handler) ListSchedules(c echo.Context) error {
 		)
 	} else {
 		// 不带过滤,返回全部日程
-		rows, err = handler.store.DB().QueryContext(
+		rows, err = handler.store.QueryContext(
 			c.Request().Context(),
 			`SELECT id, title, start_time, end_time, location, created_at, updated_at
 			 FROM schedules
@@ -179,24 +179,21 @@ func (handler *Handler) CreateSchedule(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "end_time must be after start_time")
 	}
 
-	result, err := handler.store.DB().ExecContext(
+	// PG 不支持 LastInsertId,通过 RETURNING 直接拿新记录 id
+	var scheduleID int64
+	err = handler.store.QueryRowContext(
 		c.Request().Context(),
 		`INSERT INTO schedules (user_id, title, description, start_time, end_time, location)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
 		userID,
 		request.Title,
 		nullableString(request.Description),
 		startTime,
 		endTime,
 		nullableString(request.Location),
-	)
+	).Scan(&scheduleID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create schedule")
-	}
-
-	scheduleID, err := result.LastInsertId()
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read created schedule")
 	}
 
 	detail, err := handler.findScheduleDetail(c.Request().Context(), userID, scheduleID)
@@ -266,7 +263,7 @@ func (handler *Handler) UpdateSchedule(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "end_time must be after start_time")
 	}
 
-	result, err := handler.store.DB().ExecContext(
+	result, err := handler.store.ExecContext(
 		c.Request().Context(),
 		`UPDATE schedules
 		 SET title = ?, description = ?, start_time = ?, end_time = ?, location = ?
@@ -318,7 +315,7 @@ func (handler *Handler) DeleteSchedule(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "schedule not found")
 	}
 
-	result, err := handler.store.DB().ExecContext(
+	result, err := handler.store.ExecContext(
 		c.Request().Context(),
 		`DELETE FROM schedules WHERE id = ? AND user_id = ?`,
 		scheduleID,
@@ -342,7 +339,7 @@ func (handler *Handler) DeleteSchedule(c echo.Context) error {
 // findScheduleDetail 查询单条日程详情(含描述)
 func (handler *Handler) findScheduleDetail(ctx context.Context, userID int64, scheduleID int64) (ScheduleDetail, error) {
 	var record scheduleRecord
-	row := handler.store.DB().QueryRowContext(
+	row := handler.store.QueryRowContext(
 		ctx,
 		`SELECT id, title, description, start_time, end_time, location, created_at, updated_at
 		 FROM schedules
@@ -362,7 +359,7 @@ func (handler *Handler) findScheduleDetail(ctx context.Context, userID int64, sc
 // scheduleExists 检查日程是否存在(用于 UpdateSchedule 的 0 行更新判断)
 func (handler *Handler) scheduleExists(ctx context.Context, userID int64, scheduleID int64) (bool, error) {
 	var count int
-	err := handler.store.DB().QueryRowContext(
+	err := handler.store.QueryRowContext(
 		ctx,
 		`SELECT COUNT(*) FROM schedules WHERE id = ? AND user_id = ?`,
 		scheduleID,

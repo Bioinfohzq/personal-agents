@@ -1,3 +1,2 @@
--- 命令手册表新增使用场景字段
--- scenarios 为多行文本,每行描述一个使用场景及其示例命令。
-ALTER TABLE commands ADD COLUMN scenarios TEXT NULL AFTER parameters;
+-- 已合并到 000005(命令表按最终形态一次性建表),保留空文件以维持迁移版本链
+SELECT 1;

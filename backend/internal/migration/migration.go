@@ -18,8 +18,8 @@ func Apply(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version VARCHAR(255) PRIMARY KEY,
-			applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)
 	`); err != nil {
 		return err
 	}
@@ -44,7 +44,7 @@ func Apply(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("apply migration %s: %w", version, err)
 		}
 
-		if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations (version) VALUES (?)`, version); err != nil {
+		if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations (version) VALUES ($1)`, version); err != nil {
 			return err
 		}
 	}
@@ -70,7 +70,7 @@ func migrationFiles() ([]string, error) {
 
 func isApplied(ctx context.Context, db *sql.DB, version string) (bool, error) {
 	var count int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&count); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = $1`, version).Scan(&count); err != nil {
 		return false, err
 	}
 

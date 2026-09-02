@@ -158,7 +158,7 @@ func (handler *Handler) ListKnowledgeItems(c echo.Context) error {
 
 	likePattern := "%" + keyword + "%"
 
-	rows, err := handler.store.DB().QueryContext(
+	rows, err := handler.store.QueryContext(
 		c.Request().Context(),
 		`SELECT ki.id, ki.title, ki.category_id, c.name, c.slug, ki.sub_category, ki.tags, ki.summary, ki.template_type, ki.created_at, ki.updated_at
 		 FROM knowledge_items ki
@@ -247,10 +247,12 @@ func (handler *Handler) CreateKnowledgeItem(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid comparison")
 	}
 
-	result, err := handler.store.DB().ExecContext(
+	// PG 不支持 LastInsertId,通过 RETURNING 直接拿新记录 id
+	var itemID int64
+	err = handler.store.QueryRowContext(
 		c.Request().Context(),
 		`INSERT INTO knowledge_items (user_id, title, category_id, sub_category, tags, summary, content, notes, reference_url, extra, template_type, steps, comparison)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 		userID,
 		request.Title,
 		request.CategoryID,
@@ -264,14 +266,9 @@ func (handler *Handler) CreateKnowledgeItem(c echo.Context) error {
 		request.TemplateType,
 		nullableString(string(stepsJSON)),
 		nullableString(comparisonJSON),
-	)
+	).Scan(&itemID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create knowledge item")
-	}
-
-	itemID, err := result.LastInsertId()
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read created knowledge item")
 	}
 
 	detail, err := handler.findKnowledgeDetail(c.Request().Context(), userID, itemID)
@@ -351,7 +348,7 @@ func (handler *Handler) UpdateKnowledgeItem(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid comparison")
 	}
 
-	result, err := handler.store.DB().ExecContext(
+	result, err := handler.store.ExecContext(
 		c.Request().Context(),
 		`UPDATE knowledge_items
 		 SET title = ?, category_id = ?, sub_category = ?, tags = ?, summary = ?, content = ?, notes = ?, reference_url = ?, extra = ?, template_type = ?, steps = ?, comparison = ?
@@ -409,7 +406,7 @@ func (handler *Handler) DeleteKnowledgeItem(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "knowledge item not found")
 	}
 
-	result, err := handler.store.DB().ExecContext(
+	result, err := handler.store.ExecContext(
 		c.Request().Context(),
 		`DELETE FROM knowledge_items WHERE id = ? AND user_id = ?`,
 		itemID,
@@ -458,7 +455,7 @@ func (handler *Handler) MoveKnowledgeCategory(c echo.Context) error {
 	}
 
 	// 只更新 category_id
-	result, err := handler.store.DB().ExecContext(
+	result, err := handler.store.ExecContext(
 		c.Request().Context(),
 		`UPDATE knowledge_items SET category_id = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
 		request.CategoryID,
@@ -485,7 +482,7 @@ func (handler *Handler) MoveKnowledgeCategory(c echo.Context) error {
 // findKnowledgeDetail 查询单条知识详情
 func (handler *Handler) findKnowledgeDetail(ctx context.Context, userID int64, itemID int64) (KnowledgeDetail, error) {
 	var record knowledgeRecord
-	row := handler.store.DB().QueryRowContext(
+	row := handler.store.QueryRowContext(
 		ctx,
 		`SELECT ki.id, ki.title, ki.category_id, c.name, c.slug, ki.sub_category, ki.tags, ki.summary, ki.content, ki.notes, ki.reference_url, ki.extra, ki.template_type, ki.steps, ki.comparison, ki.created_at, ki.updated_at
 		 FROM knowledge_items ki
@@ -506,7 +503,7 @@ func (handler *Handler) findKnowledgeDetail(ctx context.Context, userID int64, i
 // knowledgeExists 检查知识条目是否存在
 func (handler *Handler) knowledgeExists(ctx context.Context, userID int64, itemID int64) (bool, error) {
 	var count int
-	err := handler.store.DB().QueryRowContext(
+	err := handler.store.QueryRowContext(
 		ctx,
 		`SELECT COUNT(*) FROM knowledge_items WHERE id = ? AND user_id = ?`,
 		itemID,

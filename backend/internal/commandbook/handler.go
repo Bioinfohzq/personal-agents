@@ -143,7 +143,7 @@ func (handler *Handler) ListCommands(c echo.Context) error {
 
 	likePattern := "%" + keyword + "%"
 
-	rows, err := handler.store.DB().QueryContext(
+	rows, err := handler.store.QueryContext(
 		c.Request().Context(),
 		`SELECT c.id, c.title, c.command_text, c.category_id, cat.name, cat.slug, c.sub_category, c.template_type, c.created_at, c.updated_at
 		 FROM commands c
@@ -216,10 +216,12 @@ func (handler *Handler) CreateCommand(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid steps")
 	}
 
-	result, err := handler.store.DB().ExecContext(
+	// PG 不支持 LastInsertId,通过 RETURNING 直接拿新记录 id
+	var commandID int64
+	err = handler.store.QueryRowContext(
 		c.Request().Context(),
 		`INSERT INTO commands (user_id, title, command_text, category_id, sub_category, introduction, parameters, scenarios, notes, reference_url, template_type, steps)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 		userID,
 		request.Title,
 		request.CommandText,
@@ -232,14 +234,9 @@ func (handler *Handler) CreateCommand(c echo.Context) error {
 		nullableString(request.ReferenceURL),
 		request.TemplateType,
 		nullableString(string(stepsJSON)),
-	)
+	).Scan(&commandID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create command")
-	}
-
-	commandID, err := result.LastInsertId()
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read created command")
 	}
 
 	detail, err := handler.findCommandDetail(c.Request().Context(), userID, commandID)
@@ -310,7 +307,7 @@ func (handler *Handler) UpdateCommand(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid steps")
 	}
 
-	result, err := handler.store.DB().ExecContext(
+	result, err := handler.store.ExecContext(
 		c.Request().Context(),
 		`UPDATE commands
 		 SET title = ?, command_text = ?, category_id = ?, sub_category = ?, introduction = ?, parameters = ?, scenarios = ?, notes = ?, reference_url = ?, template_type = ?, steps = ?
@@ -367,7 +364,7 @@ func (handler *Handler) DeleteCommand(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "command not found")
 	}
 
-	result, err := handler.store.DB().ExecContext(
+	result, err := handler.store.ExecContext(
 		c.Request().Context(),
 		`DELETE FROM commands WHERE id = ? AND user_id = ?`,
 		commandID,
@@ -416,7 +413,7 @@ func (handler *Handler) MoveCommandCategory(c echo.Context) error {
 	}
 
 	// 只更新 category_id
-	result, err := handler.store.DB().ExecContext(
+	result, err := handler.store.ExecContext(
 		c.Request().Context(),
 		`UPDATE commands SET category_id = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
 		request.CategoryID,
@@ -443,7 +440,7 @@ func (handler *Handler) MoveCommandCategory(c echo.Context) error {
 // findCommandDetail 查询单条命令详情(含 introduction / parameters / notes / steps)
 func (handler *Handler) findCommandDetail(ctx context.Context, userID int64, commandID int64) (CommandDetail, error) {
 	var record commandRecord
-	row := handler.store.DB().QueryRowContext(
+	row := handler.store.QueryRowContext(
 		ctx,
 		`SELECT c.id, c.title, c.command_text, c.category_id, cat.name, cat.slug, c.sub_category, c.introduction, c.parameters, c.scenarios, c.notes, c.reference_url, c.template_type, c.steps, c.created_at, c.updated_at
 		 FROM commands c
@@ -464,7 +461,7 @@ func (handler *Handler) findCommandDetail(ctx context.Context, userID int64, com
 // commandExists 检查命令是否存在(用于 UpdateCommand 的 0 行更新判断)
 func (handler *Handler) commandExists(ctx context.Context, userID int64, commandID int64) (bool, error) {
 	var count int
-	err := handler.store.DB().QueryRowContext(
+	err := handler.store.QueryRowContext(
 		ctx,
 		`SELECT COUNT(*) FROM commands WHERE id = ? AND user_id = ?`,
 		commandID,

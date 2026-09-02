@@ -60,9 +60,12 @@ Agent 在开始任何开发任务前,必须主动读取以下文件以了解产�
 - 文件上传控件在 macOS 下慎用 `accept=".md"` 等纯扩展名过滤,会导致文件对话框中文件不可见
 
 ### 后端(backend/)
-- 使用 Go,服务启动时自动执行 `backend/migrations/*.up.sql` 迁移
+- 使用 Go + PostgreSQL(pgx 驱动),服务启动时自动执行 `backend/migrations/*.up.sql` 迁移
+- 数据访问用原生 database/sql;所有 SQL 占位符统一写 `?`,由 [database.go](./backend/internal/database/database.go) 的 rebind 层自动转换为 PG 的 `$1,$2...`,禁止手写 `$N`
+- INSERT 取新 id 一律用 `RETURNING id`(PG 不支持 LastInsertId)
 - 业务模块按 `internal/<module>/` 组织,每个模块包含 `handler.go`(路由)、领域模型文件、可选的 `parse_ai.go`(AI 解析逻辑)
 - 模板类型/枚举值新增时,前后端校验必须同步更新
+- 向量数据存统一 `embeddings` 表(多态关联 source_type/source_id),删除源记录时必须在同一事务中删除对应向量(事务双删)
 
 ### 智能体(agent/)
 - 使用 LangGraph + Python(uv 管理依赖)

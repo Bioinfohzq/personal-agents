@@ -1,1 +1,1 @@
-ALTER TABLE commands DROP COLUMN introduction;
+SELECT 1;

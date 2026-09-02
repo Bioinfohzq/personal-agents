@@ -1,4 +1,4 @@
-﻿"""Checkpoint / short-term memory factory.
+"""Checkpoint / short-term memory factory.
 
 对外入口：
 - ``generate_checkpointer``：async 上下文管理器，供 ``langgraph.json`` 的 ``checkpointer.path`` 使用。
@@ -106,14 +106,14 @@ async def _create_checkpointer(
         return
 
     # ------------------------------------------------------------------
-    # postgres：生产级持久化，需要可访问的 PostgreSQL 服务。
+    # postgres：生产级持久化，复用本地 PG 容器(personal-agents-pg)。
     # 配置项：backend_config["conn_string"] 或环境变量 CHECKPOINT_POSTGRES_URI
-    # 数据库需要提前创建好（如 CREATE DATABASE langgraph;），表结构由 SDK 自动创建。
-    # TODO: 目前只做了导入和参数校验，尚未接入真实异步连接池。
+    # 表结构由 SDK 的 setup() 自动创建(checkpoints/checkpoint_blobs/checkpoint_writes)。
+    # 使用 AsyncPostgresSaver + psycopg 连接池,适配异步图执行。
     # ------------------------------------------------------------------
     if backend == CheckpointBackend.POSTGRES:
         try:
-            from langgraph.checkpoint.postgres import PostgresSaver
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
         except ImportError as exc:
             raise ImportError(
                 "使用 postgres checkpoint 需要安装 langgraph-checkpoint-postgres"
@@ -123,9 +123,11 @@ async def _create_checkpointer(
         if not conn_string:
             raise ValueError("postgres checkpoint 需要配置 conn_string / CHECKPOINT_POSTGRES_URI")
 
-        saver = PostgresSaver.from_conn_string(conn_string)
-        logger.info("Checkpointer: using PostgresSaver")
-        yield saver
+        # AsyncPostgresSaver 需要显式管理 psycopg 连接池生命周期
+        async with AsyncPostgresSaver.from_conn_string(conn_string) as saver:
+            await saver.setup()
+            logger.info("Checkpointer: using AsyncPostgresSaver")
+            yield saver
         return
 
     # ------------------------------------------------------------------

@@ -1,1 +1,1 @@
-ALTER TABLE commands DROP COLUMN scenarios;
+SELECT 1;

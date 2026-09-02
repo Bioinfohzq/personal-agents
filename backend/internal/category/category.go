@@ -33,12 +33,12 @@ type Category struct {
 
 // Store 分类数据访问层
 type Store struct {
-	db *sql.DB
+	db *database.Store
 }
 
 // NewStore 创建分类存储实例
 func NewStore(store *database.Store) *Store {
-	return &Store{db: store.DB()}
+	return &Store{db: store}
 }
 
 // List 查询某用户在指定模块下的所有分类
@@ -90,7 +90,7 @@ func (store *Store) GetBySlug(ctx context.Context, userID int64, scope, slug str
 		SELECT id, user_id, scope, name, slug, sort_order, created_at, updated_at
 		FROM categories
 		WHERE scope = ? AND slug = ? AND (user_id IS NULL OR user_id = ?)
-		ORDER BY user_id IS NULL ASC
+		ORDER BY user_id NULLS FIRST
 		LIMIT 1
 	`, scope, slug, userID)
 	return store.scanCategory(row)
@@ -103,15 +103,13 @@ func (store *Store) Create(ctx context.Context, userID int64, scope, name string
 		return nil, errors.New("invalid category name")
 	}
 
-	result, err := store.db.ExecContext(ctx, `
+	// PG 不支持 LastInsertId,通过 RETURNING 直接拿新记录 id
+	var id int64
+	err := store.db.QueryRowContext(ctx, `
 		INSERT INTO categories (user_id, scope, name, slug, sort_order)
 		VALUES (?, ?, ?, ?, 50)
-	`, userID, scope, name, slug)
-	if err != nil {
-		return nil, err
-	}
-
-	id, err := result.LastInsertId()
+		RETURNING id
+	`, userID, scope, name, slug).Scan(&id)
 	if err != nil {
 		return nil, err
 	}

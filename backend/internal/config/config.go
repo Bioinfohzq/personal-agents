@@ -1,9 +1,10 @@
-﻿package config
+package config
 
 import (
 	"bufio"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -259,6 +260,7 @@ func assignYAMLValue(cfg *Config, section string, key string, value string) {
 	}
 }
 
+// buildDatabaseDSN 构建 PostgreSQL 连接串(URL 格式)
 func buildDatabaseDSN(database DatabaseConfig) string {
 	if database.DSN != "" {
 		return database.DSN
@@ -268,17 +270,12 @@ func buildDatabaseDSN(database DatabaseConfig) string {
 		return ""
 	}
 
-	parseTime := valueOrDefault(database.ParseTime, "true")
-	loc := valueOrDefault(database.Loc, "Local")
-
 	return fmt.Sprintf(
-		"%s:%s@tcp(%s:%s)/%s?parseTime=%s&loc=%s&multiStatements=true",
-		database.Username,
-		database.Password,
+		"postgres://%s:%s@%s:%s/%s?sslmode=disable",
+		url.PathEscape(database.Username),
+		url.PathEscape(database.Password),
 		database.Host,
 		database.Port,
 		database.Name,
-		parseTime,
-		loc,
 	)
 }

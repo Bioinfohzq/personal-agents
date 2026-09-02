@@ -9,14 +9,12 @@ api:
   port: 8080
 
 database:
-  driver: mysql
+  driver: postgres
   host: 127.0.0.1
-  port: 3306
-  username: "<mysql_user>"
-  password: "<mysql_password>"
-  name: "<mysql_database>"
-  parse_time: true
-  loc: Local
+  port: 5432
+  username: "<postgres_user>"
+  password: "<postgres_password>"
+  name: "<postgres_database>"
 
 auth:
   jwt_secret: "<replace_with_a_long_random_secret>"

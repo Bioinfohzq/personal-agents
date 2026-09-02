@@ -1,4 +1,4 @@
-﻿package auth
+package auth
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-sql-driver/mysql"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/labstack/echo/v4"
 	"golang.org/x/crypto/bcrypt"
 
@@ -160,25 +160,22 @@ func (handler *Handler) Register(c echo.Context) error {
 	}
 
 	// 插入用户记录：只填充对应类型的列，其余为 NULL
-	result, err := handler.store.DB().ExecContext(
+	// PG 不支持 LastInsertId,通过 RETURNING 直接拿新用户 id
+	var userID int64
+	err = handler.store.QueryRowContext(
 		c.Request().Context(),
-		`INSERT INTO users (username, phone, email, password_hash) VALUES (?, ?, ?, ?)`,
+		`INSERT INTO users (username, phone, email, password_hash) VALUES (?, ?, ?, ?) RETURNING id`,
 		nilOrString(username),
 		nilOrString(phone),
 		nilOrString(email),
 		string(passwordHash),
-	)
+	).Scan(&userID)
 	if err != nil {
 		if isDuplicateEntry(err) {
 			return echo.NewHTTPError(http.StatusConflict, "account already exists")
 		}
 
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create user")
-	}
-
-	userID, err := result.LastInsertId()
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read created user")
 	}
 
 	// 构造 userRecord 用于签发 token
@@ -203,7 +200,7 @@ func (handler *Handler) findUserByAccount(ctx context.Context, account string) (
 	// 三个字段任一匹配即可，兼容用户用任意类型注册的账号登录
 	// COALESCE 把 NULL 转成空字符串，避免 database/sql 把 NULL 扫描到 string 时报错
 	// （username / phone / email 三列均允许 NULL，取决于用户注册时用的账号类型）
-	row := handler.store.DB().QueryRowContext(
+	row := handler.store.QueryRowContext(
 		ctx,
 		`SELECT id, COALESCE(username, ''), COALESCE(phone, ''), COALESCE(email, ''), password_hash FROM users WHERE username = ? OR phone = ? OR email = ? LIMIT 1`,
 		account,
@@ -250,7 +247,8 @@ func nilOrString(s string) any {
 	return s
 }
 
+// isDuplicateEntry 判断是否为 PG 唯一约束冲突(unique_violation, SQLSTATE 23505)
 func isDuplicateEntry(err error) bool {
-	var mysqlErr *mysql.MySQLError
-	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1062
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

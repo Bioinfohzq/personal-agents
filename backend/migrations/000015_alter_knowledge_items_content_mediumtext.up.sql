@@ -1,5 +1,2 @@
--- knowledge_items.content 升级为 MEDIUMTEXT
--- 文档模板(document)直接将 Markdown 全文存入 content,TEXT 上限 64KB 不够
-ALTER TABLE knowledge_items
-  MODIFY COLUMN content MEDIUMTEXT NULL
-    COMMENT '正文:文章模板为详细介绍,文档模板为 Markdown 全文';
+-- PG TEXT 无长度限制,MySQL 的 MEDIUMTEXT 升级在 PG 中无意义,空迁移保持版本链
+SELECT 1;

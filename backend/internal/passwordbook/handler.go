@@ -82,7 +82,7 @@ func (handler *Handler) ListItems(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
 	}
 
-	rows, err := handler.store.DB().QueryContext(
+	rows, err := handler.store.QueryContext(
 		c.Request().Context(),
 		`SELECT id, platform, login_account, login_url, notes, created_at, updated_at
 		 FROM passwordbook_items
@@ -135,24 +135,21 @@ func (handler *Handler) CreateItem(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to encrypt password")
 	}
 
-	result, err := handler.store.DB().ExecContext(
+	// PG 不支持 LastInsertId,通过 RETURNING 直接拿新记录 id
+	var itemID int64
+	err = handler.store.QueryRowContext(
 		c.Request().Context(),
 		`INSERT INTO passwordbook_items (user_id, platform, login_account, password_ciphertext, login_url, notes)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
 		userID,
 		request.Platform,
 		request.LoginAccount,
 		passwordCiphertext,
 		nullableString(request.LoginURL),
 		nullableString(request.Notes),
-	)
+	).Scan(&itemID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to create passwordbook item")
-	}
-
-	itemID, err := result.LastInsertId()
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read created passwordbook item")
 	}
 
 	detail, err := handler.findItemDetail(c.Request().Context(), userID, itemID)
@@ -248,7 +245,7 @@ func (handler *Handler) DeleteItem(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "passwordbook item not found")
 	}
 
-	result, err := handler.store.DB().ExecContext(
+	result, err := handler.store.ExecContext(
 		c.Request().Context(),
 		`DELETE FROM passwordbook_items WHERE id = ? AND user_id = ?`,
 		itemID,
@@ -271,7 +268,7 @@ func (handler *Handler) DeleteItem(c echo.Context) error {
 
 func (handler *Handler) updateItem(ctx context.Context, userID int64, itemID int64, request UpdateItemRequest) (sql.Result, error) {
 	if request.Password == "" {
-		return handler.store.DB().ExecContext(
+		return handler.store.ExecContext(
 			ctx,
 			`UPDATE passwordbook_items
 			 SET platform = ?, login_account = ?, login_url = ?, notes = ?
@@ -290,7 +287,7 @@ func (handler *Handler) updateItem(ctx context.Context, userID int64, itemID int
 		return nil, err
 	}
 
-	return handler.store.DB().ExecContext(
+	return handler.store.ExecContext(
 		ctx,
 		`UPDATE passwordbook_items
 		 SET platform = ?, login_account = ?, password_ciphertext = ?, login_url = ?, notes = ?
@@ -307,7 +304,7 @@ func (handler *Handler) updateItem(ctx context.Context, userID int64, itemID int
 
 func (handler *Handler) itemExists(ctx context.Context, userID int64, itemID int64) (bool, error) {
 	var count int
-	err := handler.store.DB().QueryRowContext(
+	err := handler.store.QueryRowContext(
 		ctx,
 		`SELECT COUNT(*) FROM passwordbook_items WHERE id = ? AND user_id = ?`,
 		itemID,
@@ -318,7 +315,7 @@ func (handler *Handler) itemExists(ctx context.Context, userID int64, itemID int
 
 func (handler *Handler) findItemDetail(ctx context.Context, userID int64, itemID int64) (ItemDetail, error) {
 	var record itemRecord
-	row := handler.store.DB().QueryRowContext(
+	row := handler.store.QueryRowContext(
 		ctx,
 		`SELECT id, platform, login_account, password_ciphertext, login_url, notes, created_at, updated_at
 		 FROM passwordbook_items

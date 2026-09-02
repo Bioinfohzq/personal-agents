@@ -1,13 +1,13 @@
 CREATE TABLE IF NOT EXISTS passwordbook_items (
-  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL,
   platform VARCHAR(128) NOT NULL,
   login_account VARCHAR(255) NOT NULL,
   password_ciphertext TEXT NOT NULL,
   login_url VARCHAR(512) NULL,
   notes TEXT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  KEY idx_passwordbook_items_user_updated_at (user_id, updated_at),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT fk_passwordbook_items_user_id FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+);
+CREATE INDEX IF NOT EXISTS idx_passwordbook_items_user_updated_at ON passwordbook_items (user_id, updated_at);

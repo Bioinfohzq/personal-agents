@@ -121,7 +121,7 @@ Web 端日常使用,桌面客户端(Tauri)本地深度集成(文件系统、本�
 | # | 能力 | 状态 | 说明 | 相关模块 |
 |---|------|------|------|---------|
 | E1 | Web 端 | ✅ | React + Vite + Tailwind | web/ |
-| E2 | 后端 API | ✅ | Go + Echo + MySQL + golang-migrate | backend/ |
+| E2 | 后端 API | ✅ | Go + Echo + PostgreSQL(pgvector) + 自研迁移器 | backend/ |
 | E3 | 智能体服务 | ✅ | LangGraph + Python uv | agent/ |
 | E4 | 用户认证(JWT) | ✅ | 注册/登录/bcrypt | backend/internal/auth |
 | E5 | 桌面客户端(Tauri) | 🔧 | 骨架已存在,默认连 localhost:2024,待完善 UI 与深度集成 | desktop/ |

@@ -1,1 +1,2 @@
-ALTER TABLE commands ADD COLUMN introduction TEXT NULL AFTER sub_category;
+-- 已合并到 000005(命令表按最终形态一次性建表),保留空文件以维持迁移版本链
+SELECT 1;
