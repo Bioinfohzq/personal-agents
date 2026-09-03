@@ -149,7 +149,7 @@ func (handler *Handler) ParseAI(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "category_id is required")
 	}
 
-	cat, err := handler.categoryStore.GetByID(c.Request().Context(), req.CategoryID)
+	cat, err := handler.store.CategoryStore().GetByID(c.Request().Context(), req.CategoryID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to read category")
 	}
