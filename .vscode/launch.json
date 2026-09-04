@@ -49,7 +49,7 @@
       "cwd": "${workspaceFolder}/web"
     },
     {
-      "name": "Business API: dev server (Windows/macOS/Linux)",
+      "name": "Backend: dev server (Windows/macOS/Linux)",
       "type": "node-terminal",
       "request": "launch",
       "command": "go run ./cmd/server",
@@ -61,7 +61,7 @@
       "name": "Full stack (macOS/Linux)",
       "configurations": [
         "LangGraph: dev server (macOS/Linux)",
-        "Business API: dev server (Windows/macOS/Linux)",
+        "Backend: dev server (Windows/macOS/Linux)",
         "Frontend: dev server"
       ],
       "stopAll": true
@@ -70,7 +70,7 @@
       "name": "Full stack (Windows)",
       "configurations": [
         "LangGraph: dev server (Windows)",
-        "Business API: dev server (Windows/macOS/Linux)",
+        "Backend: dev server (Windows/macOS/Linux)",
         "Frontend: dev server"
       ],
       "stopAll": true
