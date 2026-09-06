@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -12,6 +13,7 @@ import (
 	"personal-agents/backend/internal/commandbook"
 	"personal-agents/backend/internal/config"
 	"personal-agents/backend/internal/database"
+	"personal-agents/backend/internal/embed"
 	"personal-agents/backend/internal/filesystem"
 	"personal-agents/backend/internal/knowledgebook"
 	"personal-agents/backend/internal/middleware"
@@ -107,10 +109,17 @@ func (server *Server) Handler() *echo.Echo {
 	api.DELETE("/commands/:id", commandbookHandler.DeleteCommand)
 
 	// 知识库
-	knowledgebookHandler := knowledgebook.NewHandler(server.store, server.cfg.LLM)
+	embedClient := embed.NewClient(embed.Config{
+		BaseURL: server.cfg.Embedding.OllamaURL,
+		Model:   server.cfg.Embedding.Model,
+	})
+	slog.Info("embedding service initialized", "model", server.cfg.Embedding.Model, "url", server.cfg.Embedding.OllamaURL)
+
+	knowledgebookHandler := knowledgebook.NewHandler(server.store, server.cfg.LLM, embedClient)
 	api.GET("/knowledge", knowledgebookHandler.ListKnowledgeItems)
 	api.POST("/knowledge", knowledgebookHandler.CreateKnowledgeItem)
 	api.POST("/knowledge/parse-ai", knowledgebookHandler.ParseAI)
+	api.GET("/knowledge/search", knowledgebookHandler.SemanticSearchKnowledge)
 	api.GET("/knowledge/:id", knowledgebookHandler.GetKnowledgeItem)
 	api.PUT("/knowledge/:id", knowledgebookHandler.UpdateKnowledgeItem)
 	api.POST("/knowledge/:id/move", knowledgebookHandler.MoveKnowledgeCategory)

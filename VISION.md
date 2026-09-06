@@ -80,7 +80,7 @@ Web 端日常使用,桌面客户端(Tauri)本地深度集成(文件系统、本�
 | A7 | 文档模板(Markdown 上传+预览) | ✅ | react-markdown 渲染,编辑/预览切换 | knowledgebook |
 | A8 | AI 一键解析预填 | ✅ | 标题/标签/摘要 AI 生成 | backend/internal/knowledgebook/parse_ai.go |
 | A9 | 关键词全文搜索 | ✅ | `?q=` 参数,LIKE 匹配 title/content/tags | knowledgebook/handler.go |
-| A10 | **语义向量检索** | ❌ | 需要 embedding 模型 + 向量字段/向量库 | 待建 |
+| A10 | **语义向量检索** | ✅ | 基于 bge-m3 + pgvector HNSW 余弦相似度,支持 `GET /api/v1/knowledge/search?q=xxx` 接口 | backend/internal/embed, knowledgebook/store.go |
 | A11 | **知识条目关联/反向链接** | ❌ | 条目间互相引用、"相关知识"推荐 | 待建 |
 | A12 | **Markdown 图片/附件** | ❌ | 当前只支持纯文本 Markdown,图片需转 base64 或对象存储 | 待建 |
 
@@ -94,8 +94,14 @@ Web 端日常使用,桌面客户端(Tauri)本地深度集成(文件系统、本�
 | B4 | **对话消息一键存入知识库** | ❌ | 消息气泡旁"📥 存入"按钮,选分类后创建 knowledge 记录并带 source_msg_id | 待建:Chat + Knowledgebook 联动 |
 | B5 | **对话片段全局检索** | ❌ | 历史消息全文+语义搜索,点击跳转到对话位置 | 待建:messages 表 + 搜索接口 |
 | B6 | **RAG 注入(回答前检索个人知识库)** | ❌ | Agent 在回答前自动检索 knowledge 表,把相关条目录入 context | 待建:agent 层加 retriever |
-| B7 | **长期记忆自动归档** | ❌ | AI 识别值得记住的信息 → 用户确认 → 写入 memories 表;所有对话自动携带 | 待建:新 memories 模块 |
+| B7 | **长期记忆自动归档** | 🔧 | 触发规则已在系统提示词中定义(AI识别候选+用户确认),存储层(memories表+写入工具+自动注入对话)待建 | agent/harness/prompts/system.py(规则已实现);存储层待建 |
 | B8 | **记忆管理界面** | ❌ | 查看/编辑/删除长期记忆条目 | 待建 |
+
+**B7 长期记忆识别规则(已写入系统提示词):**
+- **需要识别并记**:① 用户明确要求记住的信息;② 用户的技术偏好与习惯(工具/框架/包管理器/编码风格);③ 项目约定与规范;④ 踩过的坑/教训/明确结论;⑤ 个人事实(开发环境/设备/工作角色)
+- **不要记**:临时问题、一次性任务、闲聊问候;情绪表达、不确定的猜测;可通过工具实时查到的信息
+- **触发流程**:AI识别候选 → 主动向用户确认「是否保存为长期记忆?」→ 用户确认后才写入;发现冲突时提示用户确认是否更新覆盖
+- **更新策略**:采用"直接更新"策略,一条记忆就是一个当前事实,新事实矛盾时 UPDATE 旧记录(不保留历史版本),向量跟随源记录事务双删
 
 ### C. 全局搜索层
 
@@ -111,9 +117,9 @@ Web 端日常使用,桌面客户端(Tauri)本地深度集成(文件系统、本�
 
 | # | 能力 | 状态 | 说明 | 相关模块 |
 |---|------|------|------|---------|
-| D1 | **embedding 模型接入** | ❌ | 可选方案:本地(bge-small-zh / m3e)或在线(OpenAI/Cohere/DashScope embedding API) | 待建:backend/internal/embed |
-| D2 | **向量存储** | ❌ | 方案选型:MySQL 8.0 向量列(轻量)或 Qdrant/Chroma(专业);本项目优先 MySQL 方案避免新增依赖 | 待建 |
-| D3 | **知识入库自动向量化** | ❌ | 创建/更新 knowledge 时后台异步计算 embedding 并存储 | 待建 |
+| D1 | **embedding 模型接入** | ✅ | 本地 Ollama 服务 + bge-m3(1024维,多语言,中文效果好),通过 Go HTTP 客户端调用 `/api/embed` 接口 | backend/internal/embed/embed.go |
+| D2 | **向量存储** | ✅ | PostgreSQL + pgvector 扩展,统一 embeddings 表多态关联(source_type/source_id/chunk_index),HNSW余弦距离索引 | backend/migrations/000016_create_embeddings.up.sql |
+| D3 | **知识入库自动向量化** | ✅ | 知识创建/更新时在事务内自动计算并存储embedding,更新时先删旧向量再插新向量(事务双删),删除时同事务删向量;向量生成失败不阻塞主流程 | backend/internal/knowledgebook/store.go |
 | D4 | **消息向量化** | ❌ | 对话消息入库时异步 embedding | 待建 |
 
 ### E. 平台与交付
@@ -138,6 +144,12 @@ Web 端日常使用,桌面客户端(Tauri)本地深度集成(文件系统、本�
 | F3 | 文件系统浏览 | ✅ | 本地文件浏览 |
 | F4 | 日程管理 | ✅ | 简单日程 CRUD |
 
+### G. AI 回复规范
+
+| # | 能力 | 状态 | 说明 | 相关模块 |
+|---|------|------|------|---------|
+| G1 | 名词解释格式规范 | 🔧 | 所有技术名词首次出现时必须使用「中文全称（英文全称，缩写）」格式(例:运营商级网络地址转换(Carrier-Grade Network Address Translation，CGNAT)),当前通过系统提示词强制约束,长期记忆功能(B7)上线后迁移为长期记忆 | agent/harness/prompts/system.py |
+
 ---
 
 ## 四、推荐实现路径(分阶段)
@@ -146,8 +158,8 @@ Web 端日常使用,桌面客户端(Tauri)本地深度集成(文件系统、本�
 - B4 对话消息一键入库 → C2 顶部全局搜索框(关键词) → B5 对话片段搜索
 - **效果**:聊天里有价值的内容能存下来,全局能搜到,这就已经比豆包强了
 
-### 阶段 2:RAG 增强问答
-- D1/D2/D3 embedding + 向量存储 → B6 RAG 注入 agent
+### 阶段 2:RAG 增强问答(当前进行中,D1-D3/A10 已完成,剩 B6)
+- ~~D1/D2/D3 embedding + 向量存储~~(已完成) → B6 RAG 注入 agent
 - **效果**:提问时自动引用你的知识,AI 回答有了"你的上下文"
 
 ### 阶段 3:长期记忆

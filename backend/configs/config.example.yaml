@@ -19,3 +19,8 @@ database:
 auth:
   jwt_secret: "<replace_with_a_long_random_secret>"
   token_ttl_minutes: 10080
+
+# Embedding 向量模型配置(本地 Ollama 服务)
+embedding:
+  ollama_url: "http://127.0.0.1:11434"
+  model: "bge-m3"

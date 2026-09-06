@@ -59,7 +59,50 @@ Copy-Item .env.example .env
 ```
 然后编辑 `.env` 文件，填写您的 `DEFAULT_MODEL` 以及各提供商的 API Key（如 `DEEPSEEK_API_KEY`、`MOONSHOT_API_KEY` 等）。模型配置及 Base URL 修改见 `lead_agent/model_config.py`。
 
-### 3. 启动本地开发环境
+### 3. 启动前环境检查（每次开机必做）
+
+项目依赖三个本地服务，启动前按顺序检查：
+
+**① PostgreSQL 数据库（Docker 容器）**
+```bash
+# 检查容器是否运行
+docker ps | grep personal-agents-pg
+```
+如果没运行，启动容器：
+```bash
+docker start personal-agents-pg
+```
+验证连接：
+```bash
+docker exec personal-agents-pg psql -U root -d personal_agents -c "SELECT 1;"
+```
+
+**② Ollama 向量模型服务**
+```bash
+# 检查服务是否启动（brew services 方式）
+brew services list | grep ollama
+```
+如果没运行，启动服务：
+```bash
+brew services start ollama
+```
+验证模型可用：
+```bash
+curl -s http://localhost:11434/api/embed -d '{"model":"bge-m3","input":"test"}' | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d['embeddings'][0])==1024; print('ollama ok, dim=1024')"
+```
+
+**③ pgvector 扩展（首次启动验证一次即可）**
+```bash
+docker exec personal-agents-pg psql -U root -d personal_agents -c "SELECT extname FROM pg_extension WHERE extname='vector';"
+```
+如果没有返回 `vector`，执行：
+```bash
+docker exec personal-agents-pg psql -U root -d personal_agents -c "CREATE EXTENSION vector;"
+```
+
+三项全部通过后再启动项目服务。
+
+### 4. 启动本地开发环境
 
 #### macOS/Linux
 
@@ -102,7 +145,7 @@ pnpm run lint
 
 ## 业务后端
 
-业务后端位于 `backend/`，使用 Go 开发，负责用户、登录、权限、业务配置和数据库访问。服务启动时会连接 MySQL，并自动应用 `backend/migrations/*.up.sql` 中尚未执行过的迁移脚本；如果配置缺失或数据库不可用，服务会启动失败。
+业务后端位于 `backend/`，使用 Go 开发，负责用户、登录、权限、业务配置和数据库访问。服务启动时会连接 PostgreSQL，并自动应用 `backend/migrations/*.up.sql` 中尚未执行过的迁移脚本；如果配置缺失或数据库不可用，服务会启动失败。
 
 首次本地开发可先复制配置模板：
 ```powershell
@@ -110,17 +153,22 @@ cd backend
 Copy-Item configs/config.example.yaml configs/config.yaml
 ```
 
-然后编辑 `backend/configs/config.yaml`，填入本地 MySQL 地址：
+然后编辑 `backend/configs/config.yaml`，填入本地 PostgreSQL 地址（默认配置已可用于本地开发）：
 ```yaml
 database:
-  driver: mysql
+  driver: postgres
   host: 127.0.0.1
-  port: 3306
-  username: "<mysql_user>"
-  password: "<mysql_password>"
-  name: "<mysql_database>"
-  parse_time: true
-  loc: Local
+  port: 5432
+  username: "root"
+  password: "hzq@123456"
+  name: "personal_agents"
+```
+
+向量模型配置（默认连接本地 Ollama）：
+```yaml
+embedding:
+  ollama_url: "http://127.0.0.1:11434"
+  model: "bge-m3"
 ```
 
 本地启动：

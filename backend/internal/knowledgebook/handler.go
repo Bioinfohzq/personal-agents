@@ -11,6 +11,7 @@ import (
 
 	"personal-agents/backend/internal/config"
 	"personal-agents/backend/internal/database"
+	"personal-agents/backend/internal/embed"
 	"personal-agents/backend/internal/middleware"
 )
 
@@ -21,8 +22,8 @@ type Handler struct {
 }
 
 // NewHandler 创建知识库处理器
-func NewHandler(store *database.Store, llm config.LLMConfig) *Handler {
-	return &Handler{store: NewStore(store), llm: llm}
+func NewHandler(store *database.Store, llm config.LLMConfig, embedClient *embed.Client) *Handler {
+	return &Handler{store: NewStore(store, embedClient), llm: llm}
 }
 
 // ListKnowledgeItems GET /api/v1/knowledge
@@ -280,4 +281,41 @@ func (handler *Handler) MoveKnowledgeCategory(c echo.Context) error {
 	}
 
 	return c.NoContent(http.StatusOK)
+}
+
+// SemanticSearchKnowledge GET /api/v1/knowledge/search
+// 语义向量搜索,参数:
+//
+//	?q=xxx     搜索关键词(必填)
+//	?limit=5   返回条数,默认 5
+func (handler *Handler) SemanticSearchKnowledge(c echo.Context) error {
+	userID, ok := middleware.EchoCurrentUserID(c)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized, "missing authenticated user")
+	}
+
+	query := strings.TrimSpace(c.QueryParam("q"))
+	if query == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "q parameter is required")
+	}
+
+	limit := 5
+	limitStr := strings.TrimSpace(c.QueryParam("limit"))
+	if limitStr != "" {
+		n, err := strconv.Atoi(limitStr)
+		if err != nil || n <= 0 || n > 20 {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid limit (1-20)")
+		}
+		limit = n
+	}
+
+	results, err := handler.store.SemanticSearch(c.Request().Context(), userID, query, limit)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "semantic search failed: "+err.Error())
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"query":   query,
+		"results": results,
+	})
 }

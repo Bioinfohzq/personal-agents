@@ -15,13 +15,14 @@ import (
 )
 
 type Config struct {
-	AppName  string
-	Env      string
-	Host     string
-	Port     string
-	Database DatabaseConfig
-	Auth     AuthConfig
-	LLM      LLMConfig
+	AppName   string
+	Env       string
+	Host      string
+	Port      string
+	Database  DatabaseConfig
+	Auth      AuthConfig
+	LLM       LLMConfig
+	Embedding EmbeddingConfig
 }
 
 type DatabaseConfig struct {
@@ -43,6 +44,11 @@ type AuthConfig struct {
 
 type LLMConfig struct {
 	DefaultModel string
+}
+
+type EmbeddingConfig struct {
+	OllamaURL string
+	Model     string
 }
 
 func (cfg AuthConfig) TokenTTL() time.Duration {
@@ -84,6 +90,10 @@ func Load() Config {
 		},
 		LLM: LLMConfig{
 			DefaultModel: getEnv("DEFAULT_MODEL", fileConfig.LLM.DefaultModel),
+		},
+		Embedding: EmbeddingConfig{
+			OllamaURL: getEnv("EMBEDDING_OLLAMA_URL", valueOrDefault(fileConfig.Embedding.OllamaURL, "http://127.0.0.1:11434")),
+			Model:     getEnv("EMBEDDING_MODEL", valueOrDefault(fileConfig.Embedding.Model, "bge-m3")),
 		},
 	}
 }
@@ -256,6 +266,13 @@ func assignYAMLValue(cfg *Config, section string, key string, value string) {
 		switch key {
 		case "default_model":
 			cfg.LLM.DefaultModel = value
+		}
+	case "embedding":
+		switch key {
+		case "ollama_url":
+			cfg.Embedding.OllamaURL = value
+		case "model":
+			cfg.Embedding.Model = value
 		}
 	}
 }
