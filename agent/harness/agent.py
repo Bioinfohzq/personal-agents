@@ -1,4 +1,4 @@
-﻿"""Graph builder / executor for the lead agent harness.
+"""Graph builder / executor for the lead agent harness.
 
 使用 LangChain ``langchain.agents.create_agent`` SDK 构造 agent，
 保留 harness 配置、工具注册和状态定义作为统一扩展层。
@@ -12,6 +12,7 @@ from langchain.agents import create_agent
 from langchain_core.tools import BaseTool
 
 from agent.harness.config import HarnessConfig
+from agent.harness.memory_middleware import CoreMemoryMiddleware
 from agent.harness.model_config import load_model
 from agent.harness.prompts import SYSTEM_PROMPT
 from agent.tools.adapters.mcp import load_mcp_tools
@@ -58,4 +59,5 @@ def build_graph(config: HarnessConfig | None = None):
         model=model,
         tools=tools,
         system_prompt=SYSTEM_PROMPT,
+        middleware=[CoreMemoryMiddleware(min_importance=4)],
     )

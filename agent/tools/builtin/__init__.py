@@ -18,6 +18,7 @@ from agent.tools.builtin.filesystem import (
     scan_directory_tool,
 )
 from agent.tools.builtin.knowledge import search_knowledge_base
+from agent.tools.builtin.memory import recall_memory, save_memory
 from agent.tools.builtin.search import web_search_tool
 from agent.tools.builtin.shell import shell_tool
 
@@ -28,7 +29,9 @@ def get_builtin_tools() -> list:
         current_datetime_tool,
         calculator_tool,
         web_search_tool,
-        search_knowledge_base,  # 知识库语义检索
+        search_knowledge_base,  # 知识库语义检索(知识/命令/记忆全局)
+        save_memory,            # 保存长期记忆(自动去重合并)
+        recall_memory,          # 语义检索长期记忆
         # 系统操作工具: 仅 macOS/Linux 可用
         shell_tool,            # 执行终端命令
         scan_directory_tool,   # 扫描目录结构

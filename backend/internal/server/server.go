@@ -16,6 +16,7 @@ import (
 	"personal-agents/backend/internal/embed"
 	"personal-agents/backend/internal/filesystem"
 	"personal-agents/backend/internal/knowledgebook"
+	"personal-agents/backend/internal/memorybook"
 	"personal-agents/backend/internal/middleware"
 	"personal-agents/backend/internal/passwordbook"
 	"personal-agents/backend/internal/schedule"
@@ -79,8 +80,9 @@ func (server *Server) Handler() *echo.Echo {
 	e.GET("/api/v1/health", server.handleHealth)
 
 	// 内部服务接口（供本地 Agent 调用，用 X-Internal-Key 鉴权，不经过 JWT）
+	internalAPI := e.Group("/api/v1/internal")
 	searchHandler := search.NewHandler(server.store, embedClient, server.cfg.InternalKey)
-	e.GET("/api/v1/internal/search", searchHandler.InternalSearch)
+	internalAPI.GET("/search", searchHandler.InternalSearch)
 
 	// 认证接口（无需鉴权）
 	authHandler := auth.NewHandler(server.store, server.cfg.Auth)
@@ -130,6 +132,10 @@ func (server *Server) Handler() *echo.Echo {
 	api.PUT("/knowledge/:id", knowledgebookHandler.UpdateKnowledgeItem)
 	api.POST("/knowledge/:id/move", knowledgebookHandler.MoveKnowledgeCategory)
 	api.DELETE("/knowledge/:id", knowledgebookHandler.DeleteKnowledgeItem)
+
+	// 记忆管理
+	memoryHandler := memorybook.NewHandler(memorybook.NewStore(server.store, embedClient), server.cfg.InternalKey)
+	memoryHandler.Register(api, internalAPI)
 
 	// 全局搜索(知识库跨类型检索,JWT鉴权,前端调用)
 	api.GET("/search", searchHandler.Search)

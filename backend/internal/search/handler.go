@@ -114,7 +114,7 @@ func parseLimit(s string) int {
 	return limit
 }
 
-// searchAll 跨类型搜索,当前只查知识条目,后续扩展记忆/消息时加UNION分支即可
+// searchAll 跨类型搜索:知识条目 + 命令 + 记忆,后续扩展消息时加UNION分支即可
 func (h *Handler) searchAll(ctx context.Context, userID int64, query string, limit int) ([]Result, error) {
 	// 1. 生成query向量
 	emb, err := h.embedClient.Embed(ctx, query)
@@ -149,11 +149,23 @@ func (h *Handler) searchAll(ctx context.Context, userID int64, query string, lim
 			FROM embeddings e
 			JOIN commands c ON c.id = e.source_id
 			WHERE e.user_id = ? AND e.source_type = 'command'
+
+			UNION ALL
+
+			SELECT
+				'memory' AS type,
+				m.id,
+				'[' || m.topic || '] ' || m.title AS title,
+				LEFT(m.content, 500) AS content,
+				1 - (e.embedding <=> ?) AS similarity
+			FROM embeddings e
+			JOIN memories m ON m.id = e.source_id
+			WHERE e.user_id = ? AND e.source_type = 'memory' AND m.is_active = TRUE
 		) AS combined
 		WHERE similarity > ?
 		ORDER BY similarity DESC
 		LIMIT ?
-	`, queryVec, userID, queryVec, userID, similarityThreshold, limit)
+	`, queryVec, userID, queryVec, userID, queryVec, userID, similarityThreshold, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query embeddings: %w", err)
 	}
