@@ -104,6 +104,11 @@ export interface KnowledgeDetail extends KnowledgeSummary {
   extra?: string;
   steps?: ProcedureStep[];
   comparison?: ComparisonTable;
+  source?: {
+    thread_id?: string;
+    msg_id?: string;
+    role?: string;
+  };
 }
 
 // 创建/更新知识的请求体
@@ -120,6 +125,9 @@ export interface KnowledgeInput {
   template_type: TemplateType;
   steps: ProcedureStep[];
   comparison?: ComparisonTable;
+  source_thread_id?: string;
+  source_msg_id?: string;
+  source_role?: string;
 }
 
 // 空表单初始值

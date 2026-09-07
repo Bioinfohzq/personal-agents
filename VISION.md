@@ -93,10 +93,10 @@ Web 端日常使用,桌面客户端(Tauri)本地深度集成(文件系统、本�
 | B1 | 基础对话 UI(流式输出) | ✅ | LangGraph SDK + SSE | web/.../Chat, agent/graph.py |
 | B2 | 多会话管理 | ✅ | 会话列表、切换、删除 | web/.../ChatPage |
 | B3 | 智能体工具调用(文件/Shell/搜索/计算器等) | ✅ | MCP + builtin tools | agent/tools/ |
-| B4 | **对话消息一键存为知识条目** | ❌ | 消息气泡旁"📥 存入"按钮,选分类后创建 knowledge 记录并带 source_msg_id | 待建:Chat + Knowledgebook 联动 |
+| B4 | **对话消息一键存为知识条目** | ✅ | 消息气泡悬浮时显示「📥 存入知识库」按钮(仅user/agent消息,tool消息不显示),弹出Modal选择分类+编辑标题/标签/摘要/内容,提交后创建知识条目并自动生成向量;知识条目标记source_thread_id/source_msg_id/source_role记录来源;保存成功顶部toast提示 | web/src/components/Chat/MessageBubble.tsx, web/src/components/Chat/SaveToKnowledgeModal.tsx, backend/internal/knowledgebook/ |
 | B5 | **对话片段全局检索** | ❌ | 历史消息全文+语义搜索,点击跳转到对话位置 | 待建:messages 表 + 搜索接口 |
-| B6 | **RAG 注入(回答前检索知识库)** | ✅ | Agent 通过 `search_knowledge_base` 工具自主判断是否检索知识库,命中内容会引用来源标题;后端提供 `/api/v1/internal/search`(internal key鉴权)供Agent调用,`/api/v1/search`(JWT鉴权)供前端调用;当前支持知识条目的语义检索,后续扩展记忆/对话无需改工具 | agent/tools/builtin/knowledge.py, agent/harness/prompts/system.py, backend/internal/search/handler.go |
-| B7 | **长期记忆自动归档** | 🔧 | 触发规则已在系统提示词中定义(AI识别候选+用户确认),存储层(memories表+写入工具+自动注入对话)待建 | agent/harness/prompts/system.py(规则已实现);存储层待建 |
+| B6 | **RAG 注入(回答前检索知识库)** | ✅ | Agent 通过 `search_knowledge_base` 工具自主判断是否检索知识库,命中内容会引用来源标题;后端提供 `/api/v1/internal/search`(internal key鉴权)供Agent调用,`/api/v1/search`(JWT鉴权)供前端调用;当前支持知识条目+命令条目的语义检索;记忆(D5)接入后仅需在searchAll里加UNION分支 | agent/tools/builtin/knowledge.py, agent/harness/prompts/system.py, backend/internal/search/handler.go |
+| B7 | **长期记忆自动归档** | 🔧 | **识别规则已写入系统提示词**(AI识别候选+用户确认);**存储层未实现**(memories表+CRUD接口+save_memory工具+对话启动时记忆注入均待建);识别范围:明确要求记住的信息/技术偏好/项目约定/踩坑教训/个人事实;更新策略:新事实矛盾时直接UPDATE旧记录,向量跟随源记录事务双删 | agent/harness/prompts/system.py(规则已实现);存储层待建 |
 | B8 | **记忆管理界面** | ❌ | 查看/编辑/删除长期记忆条目 | 待建 |
 
 **B7 长期记忆识别规则(已写入系统提示词):**
@@ -120,10 +120,12 @@ Web 端日常使用,桌面客户端(Tauri)本地深度集成(文件系统、本�
 | # | 能力 | 状态 | 说明 | 相关模块 |
 |---|------|------|------|---------|
 | D1 | **embedding 模型接入** | ✅ | 本地 Ollama 服务 + bge-m3(1024维,多语言,中文效果好),通过 Go HTTP 客户端调用 `/api/embed` 接口 | backend/internal/embed/embed.go |
-| D2 | **向量存储** | ✅ | PostgreSQL + pgvector 扩展,统一 embeddings 表多态关联(source_type/source_id/chunk_index),HNSW余弦距离索引;所有数据类型(知识条目/消息/记忆)共用同一张向量表 | backend/migrations/000016_create_embeddings.up.sql |
-| D3 | **知识条目自动向量化** | ✅ | 知识条目创建/更新时在事务内自动计算并存储embedding,更新时先删旧向量再插新向量(事务双删),删除时同事务删向量;向量生成失败不阻塞主流程 | backend/internal/knowledgebook/store.go |
-| D4 | **消息向量化** | ❌ | 对话消息入库时异步 embedding | 待建 |
-| D5 | **记忆向量化** | ❌ | 长期记忆写入/更新时自动计算embedding,复用embeddings表(source_type='memory') | 待建(依赖B7存储层) |
+| D2 | **向量存储** | ✅ | PostgreSQL + pgvector 扩展,统一 embeddings 表多态关联(source_type/source_id/chunk_index),HNSW余弦距离索引;所有数据类型共用同一张向量表 | backend/migrations/000016_create_embeddings.up.sql |
+| D3 | **知识条目自动向量化** | ✅ | 知识条目创建/更新时在事务内自动计算并存储embedding,更新时ON CONFLICT幂等覆盖,删除时同事务删向量(事务双删);向量生成失败不阻塞主流程 | backend/internal/knowledgebook/store.go |
+| D3b | **命令条目自动向量化** | ✅ | 与D3对称:命令(commands表)Create/Update/Delete时同样在事务内自动处理向量,复用embeddings表(source_type='command');全局搜索通过UNION ALL合并知识+命令结果 | backend/internal/commandbook/store.go, backend/internal/search/handler.go |
+| D4 | **消息向量化** | ❌ 不自动做 | **采用方案B**:对话消息本身不自动向量化(避免噪音);只有用户点击「📥存入知识」(B4)后,消息内容才会作为知识条目入库并生成向量。近期上下文检索依赖会话历史本身(滑动窗口),不走向量库 | — |
+| D5 | **记忆向量化** | ❌ | 长期记忆(memories表)写入/更新时自动计算embedding,复用embeddings表(source_type='memory');对话开始时自动检索相关记忆注入system prompt | 待建(依赖B7存储层) |
+| D6 | **统一向量重建工具** | ❌ 待定 | 所有数据源都接入后,提供一次性CLI命令(非HTTP接口)按source_type批量重建缺失/过期向量;放在 backend/cmd/rebuild-embeddings/。旧数据量小时可手动编辑保存触发,不强制做 | 待建 |
 
 ### E. 平台与交付
 

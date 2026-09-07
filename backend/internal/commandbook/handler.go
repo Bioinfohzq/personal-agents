@@ -11,6 +11,7 @@ import (
 
 	"personal-agents/backend/internal/config"
 	"personal-agents/backend/internal/database"
+	"personal-agents/backend/internal/embed"
 	"personal-agents/backend/internal/middleware"
 )
 
@@ -21,8 +22,8 @@ type Handler struct {
 }
 
 // NewHandler 创建命令手册处理器
-func NewHandler(store *database.Store, llm config.LLMConfig) *Handler {
-	return &Handler{store: NewStore(store), llm: llm}
+func NewHandler(store *database.Store, llm config.LLMConfig, embedClient *embed.Client) *Handler {
+	return &Handler{store: NewStore(store, embedClient), llm: llm}
 }
 
 // ListCommands GET /api/v1/commands

@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { CheckCircle } from 'lucide-react';
 import { client } from '../api/client';
 import type { Message } from '../types/chat';
 import { MessageList } from '../components/Chat/MessageList';
 import { InputArea } from '../components/Chat/InputArea';
+import { SaveToKnowledgeModal } from '../components/Chat/SaveToKnowledgeModal';
 import type { MainLayoutContext } from '../layouts/MainLayout';
 
 /**
@@ -50,6 +52,11 @@ export function ChatPage() {
   // 流式输出状态:控制输入框停止按钮和消息骨架屏
   // 与 isLoading 区分:加载历史消息时不应显示停止按钮
   const [isStreaming, setIsStreaming] = useState(false);
+
+  // 「存入知识库」弹窗状态
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [savingMessage, setSavingMessage] = useState<Message | null>(null);
+  const [saveToast, setSaveToast] = useState<string>('');
 
   // 消息列表底部引用,用于自动滚动到底部
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -646,12 +653,25 @@ export function ChatPage() {
     setInput((e.target as HTMLTextAreaElement).value);
   };
 
+  /** 打开「存入知识库」弹窗 */
+  const handleOpenSaveModal = (message: Message) => {
+    setSavingMessage(message);
+    setSaveModalOpen(true);
+  };
+
+  /** 保存成功回调:显示toast */
+  const handleSaved = (itemId: number) => {
+    setSaveToast(`已存入知识库(#${itemId})`);
+    setTimeout(() => setSaveToast(''), 2500);
+  };
+
   return (
     <>
       <MessageList
         messages={messages}
         isLoading={isStreaming}
         messagesEndRef={messagesEndRef}
+        onSaveToKnowledge={handleOpenSaveModal}
       />
       <InputArea
         input={input}
@@ -663,6 +683,22 @@ export function ChatPage() {
         onCompositionStart={handleCompositionStart}
         onCompositionEnd={handleCompositionEnd}
       />
+
+      <SaveToKnowledgeModal
+        open={saveModalOpen}
+        message={savingMessage}
+        threadId={threadId}
+        onClose={() => { setSaveModalOpen(false); setSavingMessage(null); }}
+        onSaved={handleSaved}
+      />
+
+      {/* 保存成功toast */}
+      {saveToast && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] bg-green-600 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 text-sm animate-[fadeIn_0.2s_ease-out]">
+          <CheckCircle size={16} />
+          {saveToast}
+        </div>
+      )}
     </>
   );
 }

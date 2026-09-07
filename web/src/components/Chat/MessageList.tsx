@@ -5,10 +5,10 @@ import { MessageBubble } from './MessageBubble';
 interface MessageListProps {
   messages: Message[];
   isLoading: boolean;
-  messagesEndRef: React.RefObject<HTMLDivElement | null>;
+  messagesEndRef: React.RefObject<HTMLDivElement | null>;  onSaveToKnowledge?: (message: Message) => void;
 }
 
-export function MessageList({ messages, isLoading, messagesEndRef }: MessageListProps) {
+export function MessageList({ messages, isLoading, messagesEndRef, onSaveToKnowledge }: MessageListProps) {
   return (
     <main className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 bg-gray-50/50">
       <div className="max-w-4xl mx-auto space-y-6">
@@ -29,7 +29,13 @@ export function MessageList({ messages, isLoading, messagesEndRef }: MessageList
           }
 
           // 正常消息气泡(包含 agent / user / tool)
-          return <MessageBubble key={message.id} message={message} />;
+          return (
+            <MessageBubble
+              key={message.id}
+              message={message}
+              onSaveToKnowledge={onSaveToKnowledge}
+            />
+          );
         })}
         <div ref={messagesEndRef as React.RefObject<HTMLDivElement>} />
       </div>

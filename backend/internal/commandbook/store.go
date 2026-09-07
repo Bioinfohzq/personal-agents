@@ -3,26 +3,80 @@ package commandbook
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
 	"time"
+
+	"github.com/pgvector/pgvector-go"
 
 	"personal-agents/backend/internal/category"
 	"personal-agents/backend/internal/database"
+	"personal-agents/backend/internal/embed"
+)
+
+const (
+	sourceTypeCommand = "command"
 )
 
 // Store 命令手册数据访问层
 type Store struct {
 	db            *database.Store
 	categoryStore *category.Store
+	embedClient   *embed.Client
 }
 
 // NewStore 创建命令手册存储实例
-func NewStore(store *database.Store) *Store {
-	return &Store{db: store, categoryStore: category.NewStore(store)}
+func NewStore(store *database.Store, embedClient *embed.Client) *Store {
+	return &Store{db: store, categoryStore: category.NewStore(store), embedClient: embedClient}
 }
 
 // CategoryStore 暴露分类存储(供 handler 做 AI 解析时的分类校验)
 func (store *Store) CategoryStore() *category.Store {
 	return store.categoryStore
+}
+
+// buildEmbeddingText 拼接用于向量化的文本(标题+命令+说明+参数+场景+注意事项)
+func buildEmbeddingText(title, commandText, introduction, parameters, scenarios, notes string) string {
+	var parts []string
+	for _, s := range []string{title, commandText, introduction, parameters, scenarios, notes} {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// saveEmbedding 在事务中插入/更新向量记录
+func (store *Store) saveEmbedding(ctx context.Context, tx *database.Tx, userID, sourceID int64, text string) error {
+	if store.embedClient == nil {
+		slog.Warn("embed client not configured, skipping embedding generation")
+		return nil
+	}
+
+	vec, err := store.embedClient.Embed(ctx, text)
+	if err != nil {
+		return fmt.Errorf("generate embedding: %w", err)
+	}
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO embeddings (user_id, source_type, source_id, chunk_index, chunk_text, embedding, embedding_model)
+		 VALUES (?, ?, ?, 0, ?, ?, ?)
+		 ON CONFLICT (source_type, source_id, chunk_index)
+		 DO UPDATE SET chunk_text = EXCLUDED.chunk_text, embedding = EXCLUDED.embedding, embedding_model = EXCLUDED.embedding_model, updated_at = now()`,
+		userID, sourceTypeCommand, sourceID, text, pgvector.NewVector(vec), store.embedClient.Model(),
+	)
+	return err
+}
+
+// deleteEmbeddings 在事务中删除源记录的所有向量
+func (store *Store) deleteEmbeddings(ctx context.Context, tx *database.Tx, sourceID int64) error {
+	_, err := tx.ExecContext(ctx,
+		`DELETE FROM embeddings WHERE source_type = ? AND source_id = ?`,
+		sourceTypeCommand, sourceID,
+	)
+	return err
 }
 
 // List 查询命令摘要列表;filterByCategory 为 true 时按分类过滤,keyword 非空时多字段模糊搜索
@@ -62,11 +116,17 @@ func (store *Store) List(ctx context.Context, userID int64, filterByCategory boo
 	return commands, nil
 }
 
-// Create 插入命令,返回新命令 ID
+// Create 插入命令并同步生成向量(事务内)
 // PG 不支持 LastInsertId,通过 RETURNING 直接拿新记录 id
 func (store *Store) Create(ctx context.Context, userID int64, request CommandRequest, stepsJSON string) (int64, error) {
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
 	var commandID int64
-	err := store.db.QueryRowContext(
+	err = tx.QueryRowContext(
 		ctx,
 		`INSERT INTO commands (user_id, title, command_text, category_id, sub_category, introduction, parameters, scenarios, notes, reference_url, template_type, steps)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
@@ -83,6 +143,20 @@ func (store *Store) Create(ctx context.Context, userID int64, request CommandReq
 		request.TemplateType,
 		nullableString(stepsJSON),
 	).Scan(&commandID)
+	if err != nil {
+		return 0, err
+	}
+
+	embedText := buildEmbeddingText(request.Title, request.CommandText, request.Introduction, request.Parameters, request.Scenarios, request.Notes)
+	if embedText != "" {
+		if err := store.saveEmbedding(ctx, tx, userID, commandID, embedText); err != nil {
+			slog.Error("failed to generate embedding for new command", "id", commandID, "error", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
 	return commandID, err
 }
 
@@ -108,9 +182,15 @@ func (store *Store) FindDetail(ctx context.Context, userID int64, commandID int6
 	return record.detail(), nil
 }
 
-// Update 更新命令,返回受影响行数
+// Update 更新命令并同步重新生成向量(事务内双删)
 func (store *Store) Update(ctx context.Context, userID, commandID int64, request CommandRequest, stepsJSON string) (int64, error) {
-	result, err := store.db.ExecContext(
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	result, err := tx.ExecContext(
 		ctx,
 		`UPDATE commands
 		 SET title = ?, command_text = ?, category_id = ?, sub_category = ?, introduction = ?, parameters = ?, scenarios = ?, notes = ?, reference_url = ?, template_type = ?, steps = ?
@@ -132,7 +212,26 @@ func (store *Store) Update(ctx context.Context, userID, commandID int64, request
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if rowsAffected > 0 {
+		if err := store.deleteEmbeddings(ctx, tx, commandID); err != nil {
+			slog.Error("failed to delete old embeddings", "id", commandID, "error", err)
+		}
+		embedText := buildEmbeddingText(request.Title, request.CommandText, request.Introduction, request.Parameters, request.Scenarios, request.Notes)
+		if embedText != "" {
+			if err := store.saveEmbedding(ctx, tx, userID, commandID, embedText); err != nil {
+				slog.Error("failed to regenerate embedding for updated command", "id", commandID, "error", err)
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return rowsAffected, nil
 }
 
 // Exists 检查命令是否存在(用于 Update 的 0 行更新判断)
@@ -147,9 +246,19 @@ func (store *Store) Exists(ctx context.Context, userID int64, commandID int64) (
 	return count > 0, err
 }
 
-// Delete 删除命令,返回受影响行数
+// Delete 删除命令并同步删除向量(事务双删)
 func (store *Store) Delete(ctx context.Context, userID int64, commandID int64) (int64, error) {
-	result, err := store.db.ExecContext(
+	tx, err := store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	if err := store.deleteEmbeddings(ctx, tx, commandID); err != nil {
+		return 0, err
+	}
+
+	result, err := tx.ExecContext(
 		ctx,
 		`DELETE FROM commands WHERE id = ? AND user_id = ?`,
 		commandID,
@@ -158,7 +267,14 @@ func (store *Store) Delete(ctx context.Context, userID int64, commandID int64) (
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return rowsAffected, nil
 }
 
 // MoveCategory 只更新命令的分类 ID(专用移动分类接口)

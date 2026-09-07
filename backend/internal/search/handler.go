@@ -124,22 +124,36 @@ func (h *Handler) searchAll(ctx context.Context, userID int64, query string, lim
 	queryVec := pgvector.NewVector(emb)
 
 	// 2. 查向量表, JOIN对应源表拿内容
-	//    当前只支持knowledge类型;以后加memory/message时在下面加UNION ALL分支即可
+	//    通过 UNION ALL 合并多类型数据源;以后加 memory/message 时继续加分支
 	const similarityThreshold = 0.2
 	rows, err := h.store.QueryContext(ctx, `
-		SELECT 
-			'knowledge' AS type,
-			k.id,
-			k.title,
-			LEFT(COALESCE(k.summary, '') || E'\n' || COALESCE(k.content, ''), 500) AS content,
-			1 - (e.embedding <=> ?) AS similarity
-		FROM embeddings e
-		JOIN knowledge_items k ON k.id = e.source_id
-		WHERE e.user_id = ? AND e.source_type = 'knowledge'
-		  AND 1 - (e.embedding <=> ?) > ?
-		ORDER BY e.embedding <=> ?
+		SELECT * FROM (
+			SELECT 
+				'knowledge' AS type,
+				k.id,
+				k.title,
+				LEFT(COALESCE(k.summary, '') || E'\n' || COALESCE(k.content, ''), 500) AS content,
+				1 - (e.embedding <=> ?) AS similarity
+			FROM embeddings e
+			JOIN knowledge_items k ON k.id = e.source_id
+			WHERE e.user_id = ? AND e.source_type = 'knowledge'
+
+			UNION ALL
+
+			SELECT 
+				'command' AS type,
+				c.id,
+				c.title,
+				LEFT(COALESCE(c.introduction, '') || E'\n' || c.command_text || E'\n' || COALESCE(c.notes, ''), 500) AS content,
+				1 - (e.embedding <=> ?) AS similarity
+			FROM embeddings e
+			JOIN commands c ON c.id = e.source_id
+			WHERE e.user_id = ? AND e.source_type = 'command'
+		) AS combined
+		WHERE similarity > ?
+		ORDER BY similarity DESC
 		LIMIT ?
-	`, queryVec, userID, queryVec, similarityThreshold, queryVec, limit)
+	`, queryVec, userID, queryVec, userID, similarityThreshold, limit)
 	if err != nil {
 		return nil, fmt.Errorf("query embeddings: %w", err)
 	}

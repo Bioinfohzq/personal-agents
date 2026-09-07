@@ -30,18 +30,28 @@ type ComparisonTable struct {
 
 // KnowledgeRequest 创建/更新知识请求体
 type KnowledgeRequest struct {
-	Title        string           `json:"title"`
-	CategoryID   int64            `json:"category_id"`
-	SubCategory  string           `json:"sub_category"`
-	Tags         string           `json:"tags"`
-	Summary      string           `json:"summary"`
-	Content      string           `json:"content"`
-	Notes        string           `json:"notes"`
-	ReferenceURL string           `json:"reference_url"`
-	Extra        string           `json:"extra"`
-	TemplateType string           `json:"template_type"`
-	Steps        []ProcedureStep  `json:"steps"`
-	Comparison   *ComparisonTable `json:"comparison"`
+	Title          string           `json:"title"`
+	CategoryID     int64            `json:"category_id"`
+	SubCategory    string           `json:"sub_category"`
+	Tags           string           `json:"tags"`
+	Summary        string           `json:"summary"`
+	Content        string           `json:"content"`
+	Notes          string           `json:"notes"`
+	ReferenceURL   string           `json:"reference_url"`
+	Extra          string           `json:"extra"`
+	TemplateType   string           `json:"template_type"`
+	Steps          []ProcedureStep  `json:"steps"`
+	Comparison     *ComparisonTable `json:"comparison"`
+	SourceThreadID string           `json:"source_thread_id"` // 来源会话ID(从对话存入时填)
+	SourceMsgID    string           `json:"source_msg_id"`    // 来源消息ID(从对话存入时填)
+	SourceRole     string           `json:"source_role"`      // 来源消息角色(user/agent,从对话存入时填)
+}
+
+// MessageSource 消息来源信息(从对话存入的知识条目携带)
+type MessageSource struct {
+	ThreadID string `json:"thread_id,omitempty"`
+	MsgID    string `json:"msg_id,omitempty"`
+	Role     string `json:"role,omitempty"`
 }
 
 // MoveKnowledgeRequest 移动分类请求体（只接收 category_id）
@@ -73,27 +83,31 @@ type KnowledgeDetail struct {
 	Extra        string           `json:"extra,omitempty"`
 	Steps        []ProcedureStep  `json:"steps,omitempty"`
 	Comparison   *ComparisonTable `json:"comparison,omitempty"`
+	Source       *MessageSource   `json:"source,omitempty"` // 来源信息(从对话存入时有值)
 }
 
 // knowledgeRecord 数据库行映射结构体
 type knowledgeRecord struct {
-	ID           int64
-	Title        string
-	CategoryID   int64
-	CategoryName string
-	CategorySlug string
-	SubCategory  sql.NullString
-	Tags         sql.NullString
-	Summary      sql.NullString
-	Content      sql.NullString
-	Notes        sql.NullString
-	ReferenceURL sql.NullString
-	Extra        sql.NullString
-	TemplateType string
-	Steps        sql.NullString
-	Comparison   sql.NullString
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID             int64
+	Title          string
+	CategoryID     int64
+	CategoryName   string
+	CategorySlug   string
+	SubCategory    sql.NullString
+	Tags           sql.NullString
+	Summary        sql.NullString
+	Content        sql.NullString
+	Notes          sql.NullString
+	ReferenceURL   sql.NullString
+	Extra          sql.NullString
+	TemplateType   string
+	Steps          sql.NullString
+	Comparison     sql.NullString
+	SourceThreadID sql.NullString
+	SourceMsgID    sql.NullString
+	SourceRole     sql.NullString
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // isValidCategory 校验分类格式:非空、长度不超过 40、不含空白字符。
@@ -121,6 +135,9 @@ func (request *KnowledgeRequest) normalize() {
 	request.ReferenceURL = strings.TrimSpace(request.ReferenceURL)
 	request.Extra = strings.TrimSpace(request.Extra)
 	request.TemplateType = strings.TrimSpace(request.TemplateType)
+	request.SourceThreadID = strings.TrimSpace(request.SourceThreadID)
+	request.SourceMsgID = strings.TrimSpace(request.SourceMsgID)
+	request.SourceRole = strings.TrimSpace(request.SourceRole)
 	for i := range request.Steps {
 		request.Steps[i].Title = strings.TrimSpace(request.Steps[i].Title)
 		request.Steps[i].Code = strings.TrimSpace(request.Steps[i].Code)
@@ -219,6 +236,14 @@ func (record knowledgeRecord) summary() KnowledgeSummary {
 
 // detail 将数据库记录转换为详情
 func (record knowledgeRecord) detail() KnowledgeDetail {
+	var src *MessageSource
+	if record.SourceThreadID.Valid || record.SourceMsgID.Valid || record.SourceRole.Valid {
+		src = &MessageSource{
+			ThreadID: nullStringValue(record.SourceThreadID),
+			MsgID:    nullStringValue(record.SourceMsgID),
+			Role:     nullStringValue(record.SourceRole),
+		}
+	}
 	return KnowledgeDetail{
 		KnowledgeSummary: record.summary(),
 		Content:          nullStringValue(record.Content),
@@ -227,6 +252,7 @@ func (record knowledgeRecord) detail() KnowledgeDetail {
 		Extra:            nullStringValue(record.Extra),
 		Steps:            parseSteps(record.Steps),
 		Comparison:       parseComparison(record.Comparison),
+		Source:           src,
 	}
 }
 

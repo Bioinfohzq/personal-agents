@@ -111,7 +111,7 @@ func (server *Server) Handler() *echo.Echo {
 	api.DELETE("/schedules/:id", scheduleHandler.DeleteSchedule)
 
 	// 命令手册
-	commandbookHandler := commandbook.NewHandler(server.store, server.cfg.LLM)
+	commandbookHandler := commandbook.NewHandler(server.store, server.cfg.LLM, embedClient)
 	api.GET("/commands", commandbookHandler.ListCommands)
 	api.POST("/commands", commandbookHandler.CreateCommand)
 	api.POST("/commands/parse-ai", commandbookHandler.ParseAI)

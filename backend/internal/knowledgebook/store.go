@@ -130,8 +130,8 @@ func (store *Store) Create(ctx context.Context, userID int64, request KnowledgeR
 	var itemID int64
 	err = tx.QueryRowContext(
 		ctx,
-		`INSERT INTO knowledge_items (user_id, title, category_id, sub_category, tags, summary, content, notes, reference_url, extra, template_type, steps, comparison)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+		`INSERT INTO knowledge_items (user_id, title, category_id, sub_category, tags, summary, content, notes, reference_url, extra, template_type, steps, comparison, source_thread_id, source_msg_id, source_role)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 		userID,
 		request.Title,
 		request.CategoryID,
@@ -145,6 +145,9 @@ func (store *Store) Create(ctx context.Context, userID int64, request KnowledgeR
 		request.TemplateType,
 		nullableString(stepsJSON),
 		nullableString(comparisonJSON),
+		nullableString(request.SourceThreadID),
+		nullableString(request.SourceMsgID),
+		nullableString(request.SourceRole),
 	).Scan(&itemID)
 	if err != nil {
 		return 0, err
@@ -169,7 +172,7 @@ func (store *Store) FindDetail(ctx context.Context, userID int64, itemID int64) 
 	var record knowledgeRecord
 	row := store.db.QueryRowContext(
 		ctx,
-		`SELECT ki.id, ki.title, ki.category_id, c.name, c.slug, ki.sub_category, ki.tags, ki.summary, ki.content, ki.notes, ki.reference_url, ki.extra, ki.template_type, ki.steps, ki.comparison, ki.created_at, ki.updated_at
+		`SELECT ki.id, ki.title, ki.category_id, c.name, c.slug, ki.sub_category, ki.tags, ki.summary, ki.content, ki.notes, ki.reference_url, ki.extra, ki.template_type, ki.steps, ki.comparison, ki.source_thread_id, ki.source_msg_id, ki.source_role, ki.created_at, ki.updated_at
 		 FROM knowledge_items ki
 		 JOIN categories c ON c.id = ki.category_id
 		 WHERE ki.id = ? AND ki.user_id = ?
@@ -178,7 +181,7 @@ func (store *Store) FindDetail(ctx context.Context, userID int64, itemID int64) 
 		userID,
 	)
 
-	if err := row.Scan(&record.ID, &record.Title, &record.CategoryID, &record.CategoryName, &record.CategorySlug, &record.SubCategory, &record.Tags, &record.Summary, &record.Content, &record.Notes, &record.ReferenceURL, &record.Extra, &record.TemplateType, &record.Steps, &record.Comparison, &record.CreatedAt, &record.UpdatedAt); err != nil {
+	if err := row.Scan(&record.ID, &record.Title, &record.CategoryID, &record.CategoryName, &record.CategorySlug, &record.SubCategory, &record.Tags, &record.Summary, &record.Content, &record.Notes, &record.ReferenceURL, &record.Extra, &record.TemplateType, &record.Steps, &record.Comparison, &record.SourceThreadID, &record.SourceMsgID, &record.SourceRole, &record.CreatedAt, &record.UpdatedAt); err != nil {
 		return KnowledgeDetail{}, err
 	}
 
