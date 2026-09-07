@@ -17,6 +17,7 @@ from agent.tools.builtin.filesystem import (
     file_permissions_tool,
     scan_directory_tool,
 )
+from agent.tools.builtin.knowledge import search_knowledge_base
 from agent.tools.builtin.search import web_search_tool
 from agent.tools.builtin.shell import shell_tool
 
@@ -27,6 +28,7 @@ def get_builtin_tools() -> list:
         current_datetime_tool,
         calculator_tool,
         web_search_tool,
+        search_knowledge_base,  # 知识库语义检索
         # 系统操作工具: 仅 macOS/Linux 可用
         shell_tool,            # 执行终端命令
         scan_directory_tool,   # 扫描目录结构
@@ -42,3 +44,4 @@ def get_builtin_tools() -> list:
         a11y_scroll,           # 滚动页面
         a11y_wait_appear,      # 等待元素出现
     ]
+

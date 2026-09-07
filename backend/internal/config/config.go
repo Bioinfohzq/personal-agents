@@ -15,14 +15,15 @@ import (
 )
 
 type Config struct {
-	AppName   string
-	Env       string
-	Host      string
-	Port      string
-	Database  DatabaseConfig
-	Auth      AuthConfig
-	LLM       LLMConfig
-	Embedding EmbeddingConfig
+	AppName     string
+	Env         string
+	Host        string
+	Port        string
+	Database    DatabaseConfig
+	Auth        AuthConfig
+	LLM         LLMConfig
+	Embedding   EmbeddingConfig
+	InternalKey string
 }
 
 type DatabaseConfig struct {
@@ -95,6 +96,7 @@ func Load() Config {
 			OllamaURL: getEnv("EMBEDDING_OLLAMA_URL", valueOrDefault(fileConfig.Embedding.OllamaURL, "http://127.0.0.1:11434")),
 			Model:     getEnv("EMBEDDING_MODEL", valueOrDefault(fileConfig.Embedding.Model, "bge-m3")),
 		},
+		InternalKey: getEnv("INTERNAL_API_KEY", valueOrDefault(fileConfig.InternalKey, "5dfc305b3e8387a36618997357b7bc26e82ddf193bd7a20a8b7a5fd597c4ac8a")),
 	}
 }
 
@@ -273,6 +275,11 @@ func assignYAMLValue(cfg *Config, section string, key string, value string) {
 			cfg.Embedding.OllamaURL = value
 		case "model":
 			cfg.Embedding.Model = value
+		}
+	case "internal":
+		switch key {
+		case "api_key":
+			cfg.InternalKey = value
 		}
 	}
 }

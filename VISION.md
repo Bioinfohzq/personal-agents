@@ -95,7 +95,7 @@ Web 端日常使用,桌面客户端(Tauri)本地深度集成(文件系统、本�
 | B3 | 智能体工具调用(文件/Shell/搜索/计算器等) | ✅ | MCP + builtin tools | agent/tools/ |
 | B4 | **对话消息一键存为知识条目** | ❌ | 消息气泡旁"📥 存入"按钮,选分类后创建 knowledge 记录并带 source_msg_id | 待建:Chat + Knowledgebook 联动 |
 | B5 | **对话片段全局检索** | ❌ | 历史消息全文+语义搜索,点击跳转到对话位置 | 待建:messages 表 + 搜索接口 |
-| B6 | **RAG 注入(回答前检索知识库)** | ❌ | Agent 在回答前自动检索知识库,把相关内容录入 context | 待建:agent 层加 retriever |
+| B6 | **RAG 注入(回答前检索知识库)** | ✅ | Agent 通过 `search_knowledge_base` 工具自主判断是否检索知识库,命中内容会引用来源标题;后端提供 `/api/v1/internal/search`(internal key鉴权)供Agent调用,`/api/v1/search`(JWT鉴权)供前端调用;当前支持知识条目的语义检索,后续扩展记忆/对话无需改工具 | agent/tools/builtin/knowledge.py, agent/harness/prompts/system.py, backend/internal/search/handler.go |
 | B7 | **长期记忆自动归档** | 🔧 | 触发规则已在系统提示词中定义(AI识别候选+用户确认),存储层(memories表+写入工具+自动注入对话)待建 | agent/harness/prompts/system.py(规则已实现);存储层待建 |
 | B8 | **记忆管理界面** | ❌ | 查看/编辑/删除长期记忆条目 | 待建 |
 
@@ -161,11 +161,11 @@ Web 端日常使用,桌面客户端(Tauri)本地深度集成(文件系统、本�
 - B4 对话消息一键存为知识条目 → C2 顶部全局搜索框(关键词) → B5 对话片段搜索
 - **效果**:聊天里有价值的内容能存下来,全局能搜到,这就已经比豆包强了
 
-### 阶段 2:RAG 增强问答(当前进行中,D1-D3/A10 已完成,剩 B6)
-- ~~D1/D2/D3 embedding + 向量存储~~(已完成) → B6 RAG 注入 agent
-- **效果**:提问时自动引用知识库内容,AI 回答有了"你的上下文"
+### 阶段 2:RAG 增强问答 ✅ 已完成
+- D1/D2/D3 embedding + 向量存储 → A10 知识条目语义检索 → B6 RAG 注入 agent
+- **效果**:提问时 AI 会自主判断是否需要检索知识库,命中内容时引用你的知识条目回答
 
-### 阶段 3:长期记忆
+### 阶段 3:长期记忆(下一阶段)
 - B7 自动记忆归档(存储层) → B8 记忆管理界面 → D4/D5 消息与记忆向量化
 - **效果**:AI 记住你的偏好、坑点、项目约定,越用越懂你
 

@@ -19,6 +19,7 @@ import (
 	"personal-agents/backend/internal/middleware"
 	"personal-agents/backend/internal/passwordbook"
 	"personal-agents/backend/internal/schedule"
+	"personal-agents/backend/internal/search"
 	"personal-agents/backend/internal/user"
 )
 
@@ -61,14 +62,25 @@ func (server *Server) Handler() *echo.Echo {
 	e.Use(echomw.CORSWithConfig(echomw.CORSConfig{
 		AllowOrigins:     []string{"*"},
 		AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions},
-		AllowHeaders:     []string{"Content-Type", "Authorization"},
+		AllowHeaders:     []string{"Content-Type", "Authorization", "X-Internal-Key"},
 		AllowCredentials: true,
 	}))
 	e.Use(middleware.RequestLogEcho)
 
+	// 初始化 embedding 客户端
+	embedClient := embed.NewClient(embed.Config{
+		BaseURL: server.cfg.Embedding.OllamaURL,
+		Model:   server.cfg.Embedding.Model,
+	})
+	slog.Info("embedding service initialized", "model", server.cfg.Embedding.Model, "url", server.cfg.Embedding.OllamaURL)
+
 	// 健康检查（无需鉴权）
 	e.GET("/healthz", server.handleHealth)
 	e.GET("/api/v1/health", server.handleHealth)
+
+	// 内部服务接口（供本地 Agent 调用，用 X-Internal-Key 鉴权，不经过 JWT）
+	searchHandler := search.NewHandler(server.store, embedClient, server.cfg.InternalKey)
+	e.GET("/api/v1/internal/search", searchHandler.InternalSearch)
 
 	// 认证接口（无需鉴权）
 	authHandler := auth.NewHandler(server.store, server.cfg.Auth)
@@ -108,13 +120,7 @@ func (server *Server) Handler() *echo.Echo {
 	api.POST("/commands/:id/move", commandbookHandler.MoveCommandCategory)
 	api.DELETE("/commands/:id", commandbookHandler.DeleteCommand)
 
-	// 知识库
-	embedClient := embed.NewClient(embed.Config{
-		BaseURL: server.cfg.Embedding.OllamaURL,
-		Model:   server.cfg.Embedding.Model,
-	})
-	slog.Info("embedding service initialized", "model", server.cfg.Embedding.Model, "url", server.cfg.Embedding.OllamaURL)
-
+	// 知识条目
 	knowledgebookHandler := knowledgebook.NewHandler(server.store, server.cfg.LLM, embedClient)
 	api.GET("/knowledge", knowledgebookHandler.ListKnowledgeItems)
 	api.POST("/knowledge", knowledgebookHandler.CreateKnowledgeItem)
@@ -124,6 +130,9 @@ func (server *Server) Handler() *echo.Echo {
 	api.PUT("/knowledge/:id", knowledgebookHandler.UpdateKnowledgeItem)
 	api.POST("/knowledge/:id/move", knowledgebookHandler.MoveKnowledgeCategory)
 	api.DELETE("/knowledge/:id", knowledgebookHandler.DeleteKnowledgeItem)
+
+	// 全局搜索(知识库跨类型检索,JWT鉴权,前端调用)
+	api.GET("/search", searchHandler.Search)
 
 	// 分类管理
 	categoryHandler := category.NewHandler(server.store)
