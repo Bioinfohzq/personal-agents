@@ -52,17 +52,17 @@ export function MessageBubble({ message, onSaveToKnowledge }: MessageBubbleProps
           </div>
         </div>
 
-        {/* 操作栏:悬浮时显示"存入知识库"按钮 */}
+        {/* 操作栏:悬浮时显示"存入知识记录"按钮 */}
         {canSave && (
           <div className={`mt-1 flex gap-1 ${isUser ? 'justify-end' : 'justify-start'} ${hover ? 'opacity-100' : 'opacity-0'} transition-opacity`}>
             <button
               type="button"
               onClick={() => onSaveToKnowledge?.(message)}
               className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-blue-600 hover:bg-blue-50 px-2 py-1 rounded-md transition-colors"
-              title="存入知识库"
+              title="存入知识记录"
             >
               <BookmarkPlus size={13} />
-              <span>存入知识库</span>
+              <span>存入知识记录</span>
             </button>
           </div>
         )}

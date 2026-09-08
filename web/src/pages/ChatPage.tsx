@@ -9,6 +9,31 @@ import { SaveToKnowledgeModal } from '../components/Chat/SaveToKnowledgeModal';
 import type { MainLayoutContext } from '../layouts/MainLayout';
 
 /**
+ * 工具名称 → 中文友好显示名映射
+ * 用于在工具调用过程中显示隐式状态（如"正在检索知识记录..."）
+ */
+const TOOL_DISPLAY_NAMES: Record<string, string> = {
+  search_knowledge_base: '正在检索知识库',
+  save_knowledge_item: '正在保存知识记录',
+  save_memory: '正在保存长期记忆',
+  recall_memory: '正在回忆相关内容',
+  fetch_core_memories: '正在加载核心记忆',
+  run_adb_command: '正在执行设备操作',
+  get_screenshot: '正在截取屏幕',
+  list_packages: '正在获取应用列表',
+  get_uilayout: '正在分析界面结构',
+  list_files: '正在浏览文件',
+};
+
+/**
+ * 从 AI 消息 chunk 中提取当前正在调用的工具名（第一个 tool_call）
+ */
+const extractPendingTool = (msg: any): string | null => {
+  if (!msg?.tool_calls || !Array.isArray(msg.tool_calls) || msg.tool_calls.length === 0) return null;
+  return msg.tool_calls[0]?.name || null;
+};
+
+/**
  * 停止按钮 abort 控制：流式请求期间持有 controller,停止时 abort()
  * 用于中止 LangGraph 流式响应,让用户能主动结束等待
  */
@@ -53,7 +78,11 @@ export function ChatPage() {
   // 与 isLoading 区分:加载历史消息时不应显示停止按钮
   const [isStreaming, setIsStreaming] = useState(false);
 
-  // 「存入知识库」弹窗状态
+  // 工具调用隐式状态:当 AI 调用工具但工具结果尚未返回时显示
+  // 值为工具的中文显示名(如"正在检索知识记录...")
+  const [pendingTool, setPendingTool] = useState<string | null>(null);
+
+  // 「存入知识记录」弹窗状态
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const [savingMessage, setSavingMessage] = useState<Message | null>(null);
   const [saveToast, setSaveToast] = useState<string>('');
@@ -304,6 +333,19 @@ export function ChatPage() {
       const toolCallText = role === 'agent' ? getToolCallText(lgMsg) : '';
       const content = text + (text && toolCallText ? '\n' : '') + toolCallText;
       const toolName = role === 'tool' ? getToolName(lgMsg) : undefined;
+
+      // === 工具调用隐式状态检测 ===
+      // AI 消息中出现 tool_calls → 设置 pendingTool(显示"正在检索知识记录..."等)
+      // ToolMessage 到达(工具结果返回)→ 清除 pendingTool
+      if (role === 'agent') {
+        const pendingName = extractPendingTool(lgMsg);
+        if (pendingName) {
+          setPendingTool(TOOL_DISPLAY_NAMES[pendingName] || `正在调用${pendingName}`);
+        }
+      }
+      if (role === 'tool') {
+        setPendingTool(null);
+      }
 
       // 对 ToolMessage 的处理:complete 才到达(工具结果),作为独立消息插入
       // 注意:对 streamedMsgIds/currentStreamLocalId 的写入必须在 setMessages 之外完成。
@@ -601,6 +643,7 @@ export function ChatPage() {
       }
       currentRunIdRef.current = null;
       setIsStreaming(false);
+      setPendingTool(null);
       setTimeout(() => { isSendingRef.current = false; }, 0);
     }
   };
@@ -612,6 +655,7 @@ export function ChatPage() {
   const handleStop = () => {
     // 1. 客户端中止 HTTP 流(立即停止接收)
     abortControllerRef.current?.abort();
+    setPendingTool(null);
     // 2. 通知服务端取消 run(阻止模型继续推理和输出)
     const runId = currentRunIdRef.current;
     if (runId && threadId) {
@@ -653,7 +697,7 @@ export function ChatPage() {
     setInput((e.target as HTMLTextAreaElement).value);
   };
 
-  /** 打开「存入知识库」弹窗 */
+  /** 打开「存入知识记录」弹窗 */
   const handleOpenSaveModal = (message: Message) => {
     setSavingMessage(message);
     setSaveModalOpen(true);
@@ -661,7 +705,7 @@ export function ChatPage() {
 
   /** 保存成功回调:显示toast */
   const handleSaved = (itemId: number) => {
-    setSaveToast(`已存入知识库(#${itemId})`);
+    setSaveToast(`已存入知识记录(#${itemId})`);
     setTimeout(() => setSaveToast(''), 2500);
   };
 
@@ -670,6 +714,7 @@ export function ChatPage() {
       <MessageList
         messages={messages}
         isLoading={isStreaming}
+        pendingTool={pendingTool}
         messagesEndRef={messagesEndRef}
         onSaveToKnowledge={handleOpenSaveModal}
       />

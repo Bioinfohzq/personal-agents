@@ -149,12 +149,15 @@ export function MainLayout() {
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden w-full">
-      {/* 侧边栏:导航 + 会话列表 */}
+      {/* 侧边栏:导航 + 会话列表 + 底部用户菜单 */}
       <Sidebar
         isOpen={isSidebarOpen}
         threads={threads}
         currentThreadId={currentThreadId}
+        currentUser={session!.user}
+        isGuest={session!.isGuest === true}
         onDeleteThread={deleteThread}
+        onLogout={handleLogout}
       />
 
       <div className="flex-1 flex flex-col min-w-0 bg-white">
@@ -165,7 +168,6 @@ export function MainLayout() {
           currentUser={session!.user}
           onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
           onCreateThread={createNewThread}
-          onLogout={handleLogout}
         />
 
         {/* Outlet:子路由渲染位置

@@ -1,12 +1,14 @@
 import {
   Book,
   Bot,
+  Brain,
   CalendarDays,
   HardDrive,
   KeyRound,
   PanelLeftClose,
   PanelLeftOpen,
   PlusCircle,
+  BookOpen,
 } from 'lucide-react';
 import { useMemo } from 'react';
 import { useLocation } from 'react-router-dom';
@@ -30,7 +32,6 @@ interface HeaderProps {
   currentUser: AuthUser;
   onToggleSidebar: () => void;
   onCreateThread: () => void;
-  onLogout: () => void;
 }
 
 export function Header({
@@ -39,32 +40,37 @@ export function Header({
   currentUser,
   onToggleSidebar,
   onCreateThread,
-  onLogout,
 }: HeaderProps) {
   // 从 URL 路径判断当前页面,动态显示标题和图标
   const location = useLocation();
   const isChatView = location.pathname.startsWith('/chat');
 
-  const pageMeta = useMemo<{ title: string; subtitle: string; icon: LucideIcon }>(() => {
+  const pageMeta = useMemo<{ title: string; subtitle: string; icon: LucideIcon; iconBg?: string }>(() => {
     if (location.pathname.startsWith('/chat')) {
-      return { title: 'AI 助理', subtitle: 'LangGraph 连接正常', icon: Bot };
+      return { title: 'AI 助理', subtitle: 'LangGraph 连接正常', icon: Bot, iconBg: 'bg-blue-600' };
     }
     if (location.pathname.startsWith('/commandbook')) {
-      return { title: '命令手册', subtitle: '记录各类命令及个人理解', icon: Book };
+      return { title: '命令手册', subtitle: '记录各类命令及个人理解', icon: Book, iconBg: 'bg-emerald-600' };
     }
     if (location.pathname.startsWith('/schedule')) {
-      return { title: '日程', subtitle: '日程安排与提醒管理', icon: CalendarDays };
+      return { title: '日程', subtitle: '日程安排与提醒管理', icon: CalendarDays, iconBg: 'bg-violet-600' };
     }
     if (location.pathname.startsWith('/filesystem')) {
-      return { title: '文件系统', subtitle: '目录扫描与存储分析', icon: HardDrive };
+      return { title: '文件系统', subtitle: '目录扫描与存储分析', icon: HardDrive, iconBg: 'bg-orange-600' };
     }
     if (location.pathname.startsWith('/passwordbook')) {
-      return { title: '密码本', subtitle: '个人账号资料管理', icon: KeyRound };
+      return { title: '密码本', subtitle: '个人账号资料管理', icon: KeyRound, iconBg: 'bg-amber-600' };
     }
-    return { title: '个人中台', subtitle: '', icon: Bot };
+    if (location.pathname.startsWith('/knowledgebook')) {
+      return { title: '知识记录', subtitle: '个人知识与命令手册', icon: BookOpen, iconBg: 'bg-cyan-600' };
+    }
+    if (location.pathname.startsWith('/memorybook')) {
+      return { title: '长期记忆', subtitle: 'AI 记忆的偏好与经验', icon: Brain, iconBg: 'bg-indigo-600' };
+    }
+    return { title: '个人中台', subtitle: '', icon: Bot, iconBg: 'bg-blue-600' };
   }, [location.pathname]);
 
-  const { title, subtitle, icon: Icon } = pageMeta;
+  const { title, subtitle, icon: Icon, iconBg } = pageMeta;
 
   return (
     <header className="bg-white border-b shadow-sm px-4 py-3 flex items-center justify-between shrink-0 h-[68px]">
@@ -78,7 +84,7 @@ export function Header({
           {isSidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeftOpen size={20} />}
         </button>
 
-        <div className="bg-blue-600 p-1.5 rounded-lg flex-shrink-0">
+        <div className={`${iconBg ?? 'bg-blue-600'} p-1.5 rounded-lg flex-shrink-0`}>
           <Icon className="w-5 h-5 text-white" />
         </div>
 
@@ -108,13 +114,6 @@ export function Header({
             <span>新建会话</span>
           </button>
         )}
-        <button
-          type="button"
-          onClick={onLogout}
-          className="px-3 py-2 bg-white hover:bg-red-50 border border-gray-200 text-gray-600 hover:text-red-600 rounded-lg text-sm font-medium transition-colors"
-        >
-          退出
-        </button>
       </div>
     </header>
   );

@@ -118,7 +118,7 @@ export function SaveToKnowledgeModal({ open, message, threadId, onClose, onSaved
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <div className="flex items-center gap-2">
             <BookMarked size={18} className="text-blue-600" />
-            <h3 className="text-base font-semibold text-gray-900">存入知识库</h3>
+            <h3 className="text-base font-semibold text-gray-900">存入知识记录</h3>
           </div>
           <button
             onClick={onClose}

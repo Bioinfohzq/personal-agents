@@ -7,6 +7,7 @@ import { PasswordbookPage } from '../components/Passwordbook/PasswordbookPage';
 import { SchedulePage } from '../components/Schedule/SchedulePage';
 import { FileSystemPage } from '../components/FileSystem/FileSystemPage';
 import { KnowledgebookPage } from '../components/Knowledgebook/KnowledgebookPage';
+import { MemorybookPage } from '../components/Memorybook/MemorybookPage';
 
 /**
  * 路由配置
@@ -60,6 +61,8 @@ export const router = createBrowserRouter([
           { path: 'knowledgebook', element: <KnowledgebookPage /> },
           // 命令手册旧路由重定向到知识中枢命令视图
           { path: 'commandbook', element: <Navigate to="/knowledgebook?view=commands" replace /> },
+          // 长期记忆管理页(B8)
+          { path: 'memorybook', element: <MemorybookPage /> },
           // 未知路由重定向到聊天页
           { path: '*', element: <Navigate to="/chat" replace /> },
         ],
