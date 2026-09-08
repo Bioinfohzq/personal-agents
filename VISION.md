@@ -17,25 +17,25 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      全局搜索(入口)                          │
-│     关键词/语义混合检索 → 知识条目 + 对话记忆 + 命令 + 文件     │
+│     关键词/语义混合检索 → 知识条目 + 长期记忆 + 命令 + 对话     │
 └──────────────┬──────────────────────────┬───────────────────┘
                │                          │
      ┌─────────▼─────────┐    ┌───────────▼──────────┐
      │    知识条目        │    │    对话(智能体)        │
      │  - 手动录入         │◄──►│  - 聊天输出一键存为条目│
-     │  - Markdown 文档    │    │  - 自动长期记忆        │
+     │  - Markdown 文档    │    │  - A+B长期记忆        │
      │  - 分类/标签/摘要   │    │  - RAG 检索增强        │
      └─────────┬─────────┘    └───────────┬──────────┘
                │                          │
      ┌─────────▼──────────────────────────▼───────────┐
      │              向量层(Embedding)                   │
-     │  本地/在线 embedding 模型 → 相似度检索 + 全文检索  │
-     └─────────────────────────────────────────────────┘
-               │                          │
-     ┌─────────▼─────────┐    ┌───────────▼──────────┐
-     │   命令手册         │    │   辅助模块             │
-     │   (已实现)         │    │  密码/文件/日程/...     │
-     └───────────────────┘    └───────────────────────┘
+     │  bge-m3(1024维) + pgvector HNSW → 余弦相似度检索  │
+     └──────────┬──────────────┬──────────────┬────────┘
+                │              │              │
+     ┌──────────▼──┐    ┌──────▼──────┐    ┌──▼───────────┐
+     │  命令手册    │    │  长期记忆    │    │  辅助模块      │
+     │  (已实现)    │    │  (B7已实现)  │    │ 密码/文件/日程 │
+     └─────────────┘    └─────────────┘    └──────────────┘
 ```
 
 ---
@@ -95,15 +95,18 @@ Web 端日常使用,桌面客户端(Tauri)本地深度集成(文件系统、本�
 | B3 | 智能体工具调用(文件/Shell/搜索/计算器等) | ✅ | MCP + builtin tools | agent/tools/ |
 | B4 | **对话消息一键存为知识条目** | ✅ | 消息气泡悬浮时显示「📥 存入知识库」按钮(仅user/agent消息,tool消息不显示),弹出Modal选择分类+编辑标题/标签/摘要/内容,提交后创建知识条目并自动生成向量;知识条目标记source_thread_id/source_msg_id/source_role记录来源;保存成功顶部toast提示 | web/src/components/Chat/MessageBubble.tsx, web/src/components/Chat/SaveToKnowledgeModal.tsx, backend/internal/knowledgebook/ |
 | B5 | **对话片段全局检索** | ❌ | 历史消息全文+语义搜索,点击跳转到对话位置 | 待建:messages 表 + 搜索接口 |
-| B6 | **RAG 注入(回答前检索知识库)** | ✅ | Agent 通过 `search_knowledge_base` 工具自主判断是否检索知识库,命中内容会引用来源标题;后端提供 `/api/v1/internal/search`(internal key鉴权)供Agent调用,`/api/v1/search`(JWT鉴权)供前端调用;当前支持知识条目+命令条目的语义检索;记忆(D5)接入后仅需在searchAll里加UNION分支 | agent/tools/builtin/knowledge.py, agent/harness/prompts/system.py, backend/internal/search/handler.go |
-| B7 | **长期记忆自动归档** | 🔧 | **识别规则已写入系统提示词**(AI识别候选+用户确认);**存储层未实现**(memories表+CRUD接口+save_memory工具+对话启动时记忆注入均待建);识别范围:明确要求记住的信息/技术偏好/项目约定/踩坑教训/个人事实;更新策略:新事实矛盾时直接UPDATE旧记录,向量跟随源记录事务双删 | agent/harness/prompts/system.py(规则已实现);存储层待建 |
-| B8 | **记忆管理界面** | ❌ | 查看/编辑/删除长期记忆条目 | 待建 |
+| B6 | **RAG 注入(回答前检索知识库/记忆)** | ✅ | Agent 通过 `search_knowledge_base`(知识+命令) 和 `recall_memory`(记忆) 工具自主判断是否检索,命中内容会引用来源标题;后端提供 `/api/v1/internal/search`(internal key鉴权)供Agent调用,`/api/v1/search`(JWT鉴权)供前端调用;全局搜索已支持知识条目+命令+记忆三类语义检索(UNION ALL合并) | agent/tools/builtin/knowledge.py, agent/tools/builtin/memory.py, agent/harness/prompts/system.py, backend/internal/search/handler.go |
+| B7 | **长期记忆自动归档(A+B混合方案)** | ✅ | **存储层**:memories表(000018迁移)+CRUD接口+向量事务双删+语义去重合并;**Agent工具**:`save_memory`(存记忆,自动去重)/`recall_memory`(语义检索)/`core_memories`(取核心记忆);**A预注入**:`CoreMemoryMiddleware`在对话启动时将importance≥4的核心记忆注入系统消息;**B按需检索**:非核心记忆通过recall_memory工具检索;识别范围/topic枚举/importance分级/确认流程均已写入系统提示词 | backend/internal/memorybook/, agent/tools/builtin/memory.py, agent/harness/memory_middleware.py, agent/harness/prompts/system.py |
+| B8 | **记忆管理界面** | ❌ | 查看/编辑/删除/启用停用长期记忆条目 | 待建(后端接口已就绪:JWT鉴权的CRUD) |
 
-**B7 长期记忆识别规则(已写入系统提示词):**
-- **需要识别并记**:① 用户明确要求记住的信息;② 用户的技术偏好与习惯(工具/框架/包管理器/编码风格);③ 项目约定与规范;④ 踩过的坑/教训/明确结论;⑤ 个人事实(开发环境/设备/工作角色)
-- **不要记**:临时问题、一次性任务、闲聊问候;情绪表达、不确定的猜测;可通过工具实时查到的信息
-- **触发流程**:AI识别候选 → 主动向用户确认「是否保存为长期记忆?」→ 用户确认后才写入;发现冲突时提示用户确认是否更新覆盖
-- **更新策略**:采用"直接更新"策略,一条记忆就是一个当前事实,新事实矛盾时 UPDATE 旧记录(不保留历史版本),向量跟随源记录事务双删
+**B7 长期记忆 A+B 混合方案(已实现):**
+- **存储层**:memories表(000018迁移)支持topic分类(personal_fact/tech_preference/project_convention/lesson_learned/communication_style)、importance分级(1-5)、is_active软删除;向量复用统一embeddings表(source_type='memory'),事务双删;语义去重:相似度≥0.75时自动合并而非新建
+- **A预注入(核心记忆)**:CoreMemoryMiddleware在对话启动时将importance≥4的记忆作为SystemMessage注入,AI直接可见无需检索
+- **B按需检索**:非核心记忆通过recall_memory工具语义检索
+- **识别规则(已写入系统提示词)**:① 用户明确要求记住的信息;② 技术偏好与习惯;③ 项目约定与规范;④ 踩过的坑/教训/结论;⑤ 个人事实
+- **不要记**:临时问题、一次性任务、闲聊问候;情绪表达、不确定的猜测;可通过工具实时查到的信息;知识库已有正式笔记内容
+- **触发流程**:AI识别候选 → 向用户确认[topic+importance] → 用户明确确认后调用save_memory写入;存储层自动语义去重合并
+- **更新策略**:新事实矛盾时UPDATE旧记录(不保留历史版本),向量跟随源记录事务双删
 
 ### C. 全局搜索层
 
@@ -124,7 +127,7 @@ Web 端日常使用,桌面客户端(Tauri)本地深度集成(文件系统、本�
 | D3 | **知识条目自动向量化** | ✅ | 知识条目创建/更新时在事务内自动计算并存储embedding,更新时ON CONFLICT幂等覆盖,删除时同事务删向量(事务双删);向量生成失败不阻塞主流程 | backend/internal/knowledgebook/store.go |
 | D3b | **命令条目自动向量化** | ✅ | 与D3对称:命令(commands表)Create/Update/Delete时同样在事务内自动处理向量,复用embeddings表(source_type='command');全局搜索通过UNION ALL合并知识+命令结果 | backend/internal/commandbook/store.go, backend/internal/search/handler.go |
 | D4 | **消息向量化** | ❌ 不自动做 | **采用方案B**:对话消息本身不自动向量化(避免噪音);只有用户点击「📥存入知识」(B4)后,消息内容才会作为知识条目入库并生成向量。近期上下文检索依赖会话历史本身(滑动窗口),不走向量库 | — |
-| D5 | **记忆向量化** | ❌ | 长期记忆(memories表)写入/更新时自动计算embedding,复用embeddings表(source_type='memory');对话开始时自动检索相关记忆注入system prompt | 待建(依赖B7存储层) |
+| D5 | **记忆向量化** | ✅ | 长期记忆(memories表)Create/Update/Delete时自动在事务内处理embedding,复用embeddings表(source_type='memory');核心记忆(importance≥4)通过CoreMemoryMiddleware在对话启动时预注入;非核心记忆通过recall_memory工具语义检索;全局搜索已支持memory类型 | backend/internal/memorybook/store.go, agent/harness/memory_middleware.py, agent/tools/builtin/memory.py, backend/internal/search/handler.go |
 | D6 | **统一向量重建工具** | ❌ 待定 | 所有数据源都接入后,提供一次性CLI命令(非HTTP接口)按source_type批量重建缺失/过期向量;放在 backend/cmd/rebuild-embeddings/。旧数据量小时可手动编辑保存触发,不强制做 | 待建 |
 
 ### E. 平台与交付
@@ -167,12 +170,12 @@ Web 端日常使用,桌面客户端(Tauri)本地深度集成(文件系统、本�
 - D1/D2/D3 embedding + 向量存储 → A10 知识条目语义检索 → B6 RAG 注入 agent
 - **效果**:提问时 AI 会自主判断是否需要检索知识库,命中内容时引用你的知识条目回答
 
-### 阶段 3:长期记忆(下一阶段)
-- B7 自动记忆归档(存储层) → B8 记忆管理界面 → D4/D5 消息与记忆向量化
-- **效果**:AI 记住你的偏好、坑点、项目约定,越用越懂你
+### 阶段 3:长期记忆 ✅ 已完成
+- B7 长期记忆自动归档(A+B混合方案,存储层+工具+中间件) → D5 记忆向量化 → B6/D5 记忆检索接入全局搜索
+- **效果**:AI 记住你的偏好、坑点、项目约定,越用越懂你;核心记忆每次对话自动注入,非核心记忆按需语义检索
 
-### 阶段 4:体验打磨与桌面端
-- C3/C4 混合检索与结果分组 → A11/A12 知识关联与附件 → E5/E6 桌面端本地 embedding
+### 阶段 4:体验打磨与桌面端(下一阶段)
+- B8 记忆管理界面(CRUD页面) → C2 顶部全局搜索框(前端) → C3/C4 混合检索与结果分组 → A11/A12 知识关联与附件 → E5/E6 桌面端本地 embedding
 - **效果**:从能用变好用,桌面端成为本地主力入口
 
 ### 阶段 5(远期):移动端、多人共享、协作等
@@ -186,17 +189,17 @@ Web 端日常使用,桌面客户端(Tauri)本地深度集成(文件系统、本�
 | source_type | 对应表 | 说明 | 向量状态 |
 |-------------|--------|------|---------|
 | `knowledge` | knowledge_items | 知识条目(手动录入/对话沉淀/文档上传) | ✅ 已实现自动向量化 |
-| `memory` | memories(待建) | 长期记忆(偏好/教训/约定/事实) | ❌ 待建 |
-| `message` | messages(待建) | 对话消息片段 | ❌ 待建 |
-| `command` | commands(可选) | 命令手册条目 | ❌ 可选 |
+| `command` | commands | 命令手册条目 | ✅ 已实现自动向量化 |
+| `memory` | memories | 长期记忆(偏好/教训/约定/事实/沟通风格) | ✅ 已实现自动向量化 |
+| `message` | messages(待建) | 对话消息片段 | ❌ 待建(不自动做,B4一键存知识已满足需求) |
 
 演进要点:
 
-1. **新增 `memories` 表**(长期记忆):id, user_id, content, category(preference/lesson/fact/convention), source_msg_id, confidence, created_at, updated_at;向量复用 embeddings 表
+1. ~~**新增 `memories` 表**(长期记忆)~~ ✅ 已实现:memories表字段为id/user_id/topic/title/content/importance/is_active/created_at/updated_at;topic枚举:personal_fact/tech_preference/project_convention/lesson_learned/communication_style;向量复用embeddings表,事务双删
 2. **`knowledge_items` 加 `source_type` 字段**:`manual`(手动)/`from_chat`(从对话),加 `source_msg_id` 反向链接到对话
-3. **新增 `messages` 相关表**存储对话历史(当前由 LangGraph checkpointer 管理,语义检索需要独立表)
-4. **新增统一搜索接口** `GET /api/v1/search?q=xxx&types=knowledge,message,command,memory`,跨类型检索后按类型聚合返回
-5. **embeddings 表的 source_type 枚举值**必须在代码层注册全局唯一,新增数据类型时同步添加
+3. **新增 `messages` 相关表**存储对话历史(当前由 LangGraph checkpointer 管理,语义检索需要独立表;近期不做,B4一键存知识已覆盖主要场景)
+4. **全局搜索接口已支持**:knowledge + command + memory 三类 UNION ALL 聚合,返回type字段区分;后续加message类型只需加UNION分支
+5. **embeddings 表的 source_type 枚举值**必须在代码层注册全局唯一,新增数据类型时同步添加(当前已注册:knowledge/command/memory)
 
 ---
 
