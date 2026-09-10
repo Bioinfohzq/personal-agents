@@ -21,6 +21,7 @@ import (
 	"personal-agents/backend/internal/passwordbook"
 	"personal-agents/backend/internal/schedule"
 	"personal-agents/backend/internal/search"
+	"personal-agents/backend/internal/systemknowledge"
 	"personal-agents/backend/internal/user"
 )
 
@@ -146,11 +147,15 @@ func (server *Server) Handler() *echo.Echo {
 	api.POST("/categories", categoryHandler.CreateCategory)
 	api.PUT("/categories/:id", categoryHandler.RenameCategory)
 	api.DELETE("/categories/:id", categoryHandler.DeleteCategory)
-	// 文件系统管理
+	// 文件系统管理(旧本地扫描接口,保留以兼容,前端已不再使用)
 	filesystemHandler := filesystem.NewHandler()
 	api.GET("/filesystem/scan", filesystemHandler.Scan)
 	api.GET("/filesystem/storage", filesystemHandler.Storage)
 	api.GET("/filesystem/permissions", filesystemHandler.Permissions)
+
+	// 系统底层知识库
+	systemKnowledgeHandler := systemknowledge.NewHandler(systemknowledge.NewStore(server.store))
+	systemKnowledgeHandler.Register(api)
 
 	return e
 }

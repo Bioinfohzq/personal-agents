@@ -1,4 +1,4 @@
-import { Bot, KeyRound, MessageSquare, Clock, CalendarDays, HardDrive, BookOpen, Trash2, Brain, LogOut, ChevronRight } from 'lucide-react';
+import { Bot, KeyRound, MessageSquare, Clock, CalendarDays, Cpu, BookOpen, Trash2, Brain, LogOut, ChevronRight } from 'lucide-react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 import type { Thread } from '../../types/chat';
@@ -29,7 +29,7 @@ const NAV_ITEMS: Array<{ to: string; label: string; icon: typeof Bot; guestHidde
   { to: '/passwordbook', label: '密码本', icon: KeyRound, guestHidden: true },
   { to: '/schedule', label: '日程', icon: CalendarDays, guestHidden: true },
   { to: '/knowledgebook', label: '知识记录', icon: BookOpen },
-  { to: '/filesystem', label: '文件系统', icon: HardDrive, guestHidden: true },
+  { to: '/filesystem', label: '系统底层', icon: Cpu, guestHidden: true },
 ];
 
 export function Sidebar({
