@@ -4,7 +4,7 @@
 -- 前端一次拉取整棵树后本地渲染
 CREATE TABLE system_knowledge_nodes (
     id          BIGSERIAL PRIMARY KEY,
-    user_id     BIGINT       NOT NULL DEFAULT 0 REFERENCES users(id) ON DELETE CASCADE,
+    user_id     BIGINT       NOT NULL DEFAULT 0,
     -- 分类: linux-fhs/syscall/process/memory/driver/cpu
     category    VARCHAR(50)  NOT NULL DEFAULT 'linux-fhs',
     -- 父节点完整路径,根节点为空串

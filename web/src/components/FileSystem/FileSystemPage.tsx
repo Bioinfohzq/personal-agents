@@ -42,11 +42,8 @@ import {
  * 每个分类展开时从后端拉取整棵树(内置节点+用户自定义合并结果)。
  */
 export function FileSystemPage() {
-  const { session, token } = useAuth();
-
-  if (session?.isGuest === true) {
-    return <Navigate to="/chat" replace />;
-  }
+  const { session } = useAuth();
+  const token = session?.token;
 
   const [expandedCategory, setExpandedCategory] = useState<SkCategory | null>(SK_CATEGORIES.linuxFHS);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -86,6 +83,11 @@ export function FileSystemPage() {
       loadCategory(expandedCategory);
     }
   }, [expandedCategory, token, loadCategory]);
+
+  // 所有 Hook 必须在条件 return 之前调用,否则会违反 React Hook 规则
+  if (session?.isGuest === true) {
+    return <Navigate to="/chat" replace />;
+  }
 
   const showToast = (msg: string) => {
     setToast(msg);

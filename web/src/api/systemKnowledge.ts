@@ -36,7 +36,7 @@ export interface SkNode {
 
 // 获取分类下所有节点
 export async function listSystemKnowledgeNodes(token: string, category: SkCategory): Promise<SkNode[]> {
-  const res = await businessFetch(token, `/system-knowledge/nodes?category=${encodeURIComponent(category)}`);
+  const res = await businessFetch(token, `/api/v1/system-knowledge/nodes?category=${encodeURIComponent(category)}`);
   await assertBusinessResponse(res, '获取知识节点失败');
   const data = await res.json() as { nodes: SkNode[] };
   return data.nodes;
@@ -54,7 +54,7 @@ export interface CreateSkNodeParams {
 }
 
 export async function createSystemKnowledgeNode(token: string, params: CreateSkNodeParams): Promise<SkNode> {
-  const res = await businessFetch(token, '/system-knowledge/nodes', {
+  const res = await businessFetch(token, '/api/v1/system-knowledge/nodes', {
     method: 'POST',
     body: JSON.stringify({
       node_type: 'dir',
@@ -78,7 +78,7 @@ export interface UpdateSkNodeParams {
 }
 
 export async function updateSystemKnowledgeNode(token: string, params: UpdateSkNodeParams): Promise<SkNode> {
-  const res = await businessFetch(token, '/system-knowledge/nodes', {
+  const res = await businessFetch(token, '/api/v1/system-knowledge/nodes', {
     method: 'PUT',
     body: JSON.stringify(params),
   });
@@ -90,7 +90,7 @@ export async function updateSystemKnowledgeNode(token: string, params: UpdateSkN
 export async function deleteSystemKnowledgeNode(token: string, category: SkCategory, path: string): Promise<{ restored_builtin: boolean }> {
   const res = await businessFetch(
     token,
-    `/system-knowledge/nodes?category=${encodeURIComponent(category)}&path=${encodeURIComponent(path)}`,
+    `/api/v1/system-knowledge/nodes?category=${encodeURIComponent(category)}&path=${encodeURIComponent(path)}`,
     { method: 'DELETE' },
   );
   await assertBusinessResponse(res, '删除节点失败');
@@ -101,7 +101,7 @@ export async function deleteSystemKnowledgeNode(token: string, category: SkCateg
 export async function resetSystemKnowledgeCategory(token: string, category: SkCategory): Promise<SkNode[]> {
   const res = await businessFetch(
     token,
-    `/system-knowledge/reset?category=${encodeURIComponent(category)}`,
+    `/api/v1/system-knowledge/reset?category=${encodeURIComponent(category)}`,
     { method: 'POST' },
   );
   await assertBusinessResponse(res, '重置失败');
