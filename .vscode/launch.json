@@ -54,6 +54,13 @@
       "request": "launch",
       "command": "go run ./cmd/server",
       "cwd": "${workspaceFolder}/backend"
+    },
+    {
+    "name": "Backend: hot reload (air)(Windows/macOS/Linux)",
+    "type": "node-terminal",
+    "request": "launch",
+    "command": "air",
+    "cwd": "${workspaceFolder}/backend"
     }
   ],
   "compounds": [
@@ -61,7 +68,8 @@
       "name": "Full stack (macOS/Linux)",
       "configurations": [
         "LangGraph: dev server (macOS/Linux)",
-        "Backend: dev server (Windows/macOS/Linux)",
+        //"Backend: dev server (Windows/macOS/Linux)",
+        "Backend: hot reload (air)(Windows/macOS/Linux)",
         "Frontend: dev server"
       ],
       "stopAll": true
@@ -70,7 +78,8 @@
       "name": "Full stack (Windows)",
       "configurations": [
         "LangGraph: dev server (Windows)",
-        "Backend: dev server (Windows/macOS/Linux)",
+        //"Backend: dev server (Windows/macOS/Linux)",
+        "Backend: hot reload (air)(Windows/macOS/Linux)",
         "Frontend: dev server"
       ],
       "stopAll": true
